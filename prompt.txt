@@ -1,0 +1,561 @@
+# OpenSpec Proposal: AirCue — Hardware-Adaptive Gesture-Based Presentation Navigation System
+
+You are acting as a Senior Software Architect, Computer Vision Engineer, Performance Engineer, and Technical Product Designer.
+
+Your task is to analyze the existing AirCue project and create a comprehensive OpenSpec proposal that formalizes its product requirements, technical architecture, performance objectives, reliability standards, and future development direction.
+
+**IMPORTANT: This task is ONLY for proposal generation. Do not implement the proposed changes, modify production code, refactor existing modules, or introduce dependencies.**
+
+---
+
+# 1. Project Overview
+
+Project Name: AirCue
+
+AirCue is a gesture-based presentation navigation system designed primarily for solo presenters.
+
+It allows users to control presentation slides, navigate presentation content, operate a pointer, click and scroll using predefined hand gestures without physically interacting with their keyboard or mouse.
+
+## Problem Statement
+
+During solo presentations, project pitches, academic demonstrations, and professional presentations, presenters often struggle to manage their presentation while simultaneously explaining their ideas.
+
+They must divide their attention between:
+- Explaining their content.
+- Navigating presentation slides.
+- Operating the presentation pointer.
+- Managing their laptop or presentation controls.
+- Maintaining engagement with the audience.
+
+AirCue aims to bridge this gap by providing a hands-free presentation interaction system.
+
+## Core Objective
+
+Build a lightweight, reliable, hardware-adaptive gesture recognition and presentation navigation system.
+
+Its primary engineering priorities are:
+
+1. Low end-to-end interaction latency.
+2. Reliable gesture recognition.
+3. Minimal false-positive gesture activations.
+4. Stable hand tracking.
+5. Efficient CPU and RAM utilization.
+6. Hardware-adaptive execution.
+7. GPU acceleration when demonstrably beneficial.
+8. Predictable application behavior.
+9. Reliable presentation software integration.
+
+Do not optimize FPS at the expense of latency, responsiveness, or recognition reliability.
+
+---
+
+# 2. Hardware Compatibility Strategy
+
+AirCue should support a wide range of hardware configurations.
+
+The primary baseline target is:
+
+- Intel Celeron processors.
+- Intel Core i3 U-series processors.
+- Intel Xeon processors.
+- AMD Ryzen 3 U-series processors.
+- 8 GB system RAM.
+- Integrated graphics.
+- Standard laptop webcams.
+
+Mid-range and high-end configurations should receive additional performance benefits without requiring a separate application architecture.
+
+## Hardware Tiers
+
+### Tier 1: Baseline Hardware
+Target:
+- Older Intel Celeron processors.
+- Intel Core i3 U-series.
+- Older Intel Xeon systems.
+- AMD Ryzen 3 U-series.
+- 8 GB RAM.
+
+Objectives:
+- Low end-to-end latency.
+- Minimal resource consumption.
+- Stable tracking.
+- Efficient CPU inference.
+- Reduced unnecessary frame processing.
+
+### Tier 2: Mid-Range Hardware
+Target:
+- Modern Intel Core i5/i7 processors.
+- AMD Ryzen 5/7 processors.
+- Strong integrated GPUs.
+- 8–16 GB RAM.
+
+Objectives:
+- Higher inference frequency where beneficial.
+- Smoother pointer movement.
+- Improved tracking stability.
+- Adaptive processing configurations.
+
+### Tier 3: High-End Hardware
+Target:
+- Intel Core i7/i9 H/HX.
+- AMD Ryzen 7/9.
+- NVIDIA dedicated GPUs.
+- 16 GB or more RAM.
+
+Objectives:
+- GPU acceleration where supported.
+- Higher tracking frequency.
+- Smooth pointer navigation.
+- Reduced inference latency where possible.
+
+IMPORTANT:
+Do not assume GPU inference is always faster than CPU inference.
+
+The architecture must support benchmarking and selecting the most efficient execution backend.
+
+Do not promise universal hardware compatibility. Define measurable minimum, recommended, and enhanced hardware requirements.
+
+---
+
+# 3. Gesture System Requirements
+
+Formalize the following gesture vocabulary.
+
+| Gesture | Action |
+|---|---|
+| Open palm + clockwise wrist rotation | Next slide |
+| Open palm + counterclockwise wrist rotation | Previous slide |
+| Closed fist | Pause tracking |
+| Thumbs-up | Resume tracking |
+| Pinch gesture | Toggle pointer mode |
+| Index finger + thumb configuration | Pointer navigation |
+| Pinch and release | Single click |
+| Two intentional pinch actions within a defined interval | Double click |
+| Peace sign | Scroll mode |
+| Shaka gesture | Initiate exit process |
+
+## Gesture Recognition Requirements
+
+Every gesture must be:
+- Recognized using appropriate landmark and motion features.
+- Validated across multiple observations or a suitable temporal window.
+- Resistant to accidental activation.
+- Context-sensitive.
+- Compatible with the current application state.
+- Protected by suitable debounce and cooldown mechanisms.
+
+Static gestures and dynamic gestures must be handled appropriately.
+
+Do not treat every detected hand configuration as an immediate command.
+
+## Gesture-Specific Requirements
+
+### Slide Navigation
+- Detect wrist orientation changes.
+- Determine rotation direction.
+- Establish a neutral starting position.
+- Support configurable angular activation thresholds.
+- Prevent repeated activation caused by tracking jitter.
+- Support deliberate continuous rotation as an optional extension.
+
+### Continuous Rotation
+Use the existing open-palm rotation gesture.
+
+Do not introduce another hand gesture unnecessarily.
+
+Define:
+- Activation threshold.
+- Repeat interval.
+- Rotation direction.
+- Neutral-position release condition.
+- Maximum repeat frequency.
+- Cooldown behavior.
+
+### Pause and Resume
+- Fist pauses normal gesture processing.
+- Thumbs-up resumes normal tracking.
+- Resume detection must remain available while paused.
+- Pause and resume must not accidentally trigger presentation actions.
+
+### Pointer Mode
+- Support normalized hand-coordinate mapping.
+- Support different display resolutions.
+- Minimize cursor jitter.
+- Avoid excessive smoothing.
+- Provide configurable pointer sensitivity.
+- Maintain stable coordinate mapping.
+
+### Clicking
+- Define reliable pinch detection.
+- Differentiate single and double clicks.
+- Prevent repeated clicks from one continuous pinch.
+- Define an appropriate double-click recognition interval.
+
+### Scrolling
+- Peace sign activates scrolling.
+- Define scroll direction and speed mapping.
+- Prevent unintended continuous scrolling.
+- Scrolling must only be available in valid operating states.
+
+### Exit
+- Shaka gesture initiates an intentional exit process.
+- Require a deliberate hold or confirmation.
+- Never terminate the application because of a single uncertain recognition event.
+- Provide a safe keyboard fallback.
+
+---
+
+# 4. Architecture Requirements
+
+Analyze the existing architecture before proposing modifications.
+
+The proposal should formalize clear separation between:
+
+1. Camera Capture Layer
+2. Frame Processing Layer
+3. Hand Detection and Tracking Layer
+4. Landmark Feature Extraction Layer
+5. Gesture Recognition Layer
+6. Temporal Validation Layer
+7. State Management Layer
+8. Command Management Layer
+9. Presentation Action Adapter
+10. Performance Monitoring Layer
+
+The gesture recognition system must not directly execute PowerPoint commands.
+
+Instead, recognized gestures should generate validated semantic events.
+
+Example:
+
+FIST_DETECTED → STATE_VALIDATION → PAUSE_TRACKING
+
+The command manager must validate whether a command is allowed in the current state before execution.
+
+Keep the architecture modular and replaceable.
+
+Avoid unnecessary abstractions and excessive complexity.
+
+---
+
+# 5. Application State Management
+
+Formalize the application state machine.
+
+Suggested states:
+
+- INITIALIZING
+- IDLE
+- ACTIVE
+- PAUSED
+- POINTER_MODE
+- SCROLL_MODE
+- EXITING
+- ERROR
+
+Define:
+- Allowed transitions.
+- Invalid transitions.
+- Gesture priorities.
+- State-specific gesture availability.
+- Recovery behavior.
+- Safe-state behavior.
+
+The system must reject commands that are invalid in the current state.
+
+Ensure that pausing, resuming, pointer mode, scrolling, and exiting cannot produce conflicting commands.
+
+---
+
+# 6. Performance Engineering Requirements
+
+Performance must be measured across the entire processing pipeline.
+
+The proposal must define instrumentation for:
+
+- Camera capture latency.
+- Frame queue latency.
+- Preprocessing latency.
+- Model inference latency.
+- Landmark processing latency.
+- Gesture classification latency.
+- Temporal confirmation latency.
+- Command dispatch latency.
+- Presentation action latency.
+- End-to-end latency.
+
+## Initial Performance Targets
+
+Treat these as proposed engineering acceptance targets, not verified existing performance.
+
+| Metric | Baseline Hardware | Mid/High-End |
+|---|---:|---:|
+| Camera resolution | 640×360 | 720p |
+| Processing frequency | 10–15 FPS | 20–30 FPS |
+| Recognition processing | Under 50 ms | Under 35 ms |
+| End-to-end p50 latency | Under 100 ms | Under 70 ms |
+| End-to-end p95 latency | Under 150 ms | Under 100 ms |
+| Tracking stability | High | High |
+
+The proposal must critically evaluate whether these targets are realistic.
+
+If they conflict with recognition reliability, prioritize reliable command execution over aggressive latency targets.
+
+## Optimization Requirements
+
+Investigate:
+
+- Latest-frame processing.
+- Bounded frame buffers.
+- Independent camera capture and inference.
+- Adaptive inference frequency.
+- Efficient hand tracking.
+- Region-of-interest processing.
+- CPU optimization.
+- GPU benchmarking.
+- Memory management.
+- Adaptive smoothing.
+- Avoiding unnecessary inference.
+- Threading and synchronization overhead.
+
+Do not introduce optimizations without identifying the bottleneck they address.
+
+Do not add GPU dependencies unless justified by benchmarks and compatibility analysis.
+
+---
+
+# 7. Reliability and Safety Requirements
+
+AirCue must be dependable during actual presentations.
+
+Formalize safeguards for:
+
+- Temporary hand loss.
+- Partial hand occlusion.
+- Multiple hands.
+- Poor lighting.
+- Motion blur.
+- Camera freezing.
+- Invalid landmarks.
+- NaN or degenerate landmark frames.
+- Tracking fluctuations.
+- PowerPoint losing focus.
+- Presentation adapter failures.
+- Unexpected application termination.
+
+## Reliability Targets
+
+Use these as initial proposed acceptance targets:
+
+| Metric | Target |
+|---|---:|
+| Intended gesture recognition | At least 98% |
+| False command activations | At most 1 per 30 minutes |
+| Slide navigation success | At least 99% |
+| Pointer availability during valid visibility | At least 95% |
+| Recovery after temporary hand loss | Under 500 ms |
+| Crashes in a 60-minute test | Zero |
+
+Define how these metrics will be measured.
+
+Do not equate unit test pass rates with real-world recognition accuracy.
+
+Include a testing strategy involving real users, real presentations, different environments, and different hardware configurations.
+
+---
+
+# 8. PowerPoint Integration
+
+Formalize the Windows presentation integration layer.
+
+Current integration direction:
+- Python.
+- ctypes.
+- Windows APIs.
+- PowerPoint process interaction.
+- Mouse and keyboard event simulation where appropriate.
+
+Requirements:
+- Next slide.
+- Previous slide.
+- Pointer movement.
+- Single click.
+- Double click.
+- Scroll.
+- Presentation focus validation.
+- Slideshow state validation.
+- Error handling.
+- Safe command dispatch.
+
+Keep presentation integration separate from gesture recognition.
+
+Do not introduce additional presentation software integrations into the initial scope unless the existing architecture already supports them.
+
+---
+
+# 9. Testing Strategy
+
+The OpenSpec proposal must include a comprehensive testing strategy.
+
+Cover:
+
+### Unit Testing
+- Gesture classification.
+- Landmark calculations.
+- Rotation detection.
+- Pinch calculations.
+- State transitions.
+- Command validation.
+- Cooldowns.
+- Debouncing.
+
+### Integration Testing
+- Camera pipeline.
+- Gesture-to-command flow.
+- PowerPoint adapter.
+- Pointer control.
+- Pause/resume behavior.
+
+### Performance Testing
+- CPU utilization.
+- RAM usage.
+- Inference latency.
+- End-to-end latency.
+- p50/p95 latency.
+- Frame processing behavior.
+
+### Reliability Testing
+- Long-duration operation.
+- Poor lighting.
+- Different camera distances.
+- Partial occlusion.
+- Different hand sizes.
+- Natural hand movements.
+- Multiple hands.
+- Unexpected camera disconnection.
+
+### Hardware Testing
+Test representative baseline, mid-range, and high-end machines.
+
+Do not claim hardware support based on specifications alone.
+
+---
+
+# 10. OpenSpec Deliverables
+
+Generate a complete OpenSpec proposal following the installed OpenSpec conventions.
+
+Inspect the existing OpenSpec structure and follow its actual syntax and file organization.
+
+The proposal should include:
+
+1. Change proposal and rationale.
+2. Problem statement.
+3. Goals and non-goals.
+4. Functional requirements.
+5. Non-functional requirements.
+6. Architecture decisions.
+7. Gesture behavior specifications.
+8. Application state machine.
+9. Hardware adaptation strategy.
+10. Performance targets.
+11. Reliability requirements.
+12. Testing and validation strategy.
+13. Risks and mitigations.
+14. Implementation phases.
+15. Acceptance criteria.
+16. Dependencies and compatibility considerations.
+
+Where appropriate, create separate capability specifications rather than one enormous specification.
+
+Requirements must be testable and written in clear, unambiguous language.
+
+Use scenarios in Given/When/Then format wherever suitable.
+
+---
+
+# 11. Existing Repository Preservation
+
+This is critical.
+
+Before writing the proposal:
+
+1. Inspect the complete existing project structure.
+2. Read existing documentation.
+3. Examine the current architecture.
+4. Inspect existing gesture implementations.
+5. Inspect the current state-management system.
+6. Examine the camera and inference pipeline.
+7. Inspect the PowerPoint integration.
+8. Review existing tests and test reports.
+9. Identify already implemented capabilities.
+10. Identify incomplete capabilities and genuine architectural gaps.
+
+Do not propose rebuilding functionality that already works.
+
+Do not overwrite existing decisions without technical justification.
+
+Do not invent existing performance measurements.
+
+Clearly distinguish:
+- Already implemented.
+- Partially implemented.
+- Not implemented.
+- Proposed improvements.
+- Future possibilities.
+
+Preserve existing working behavior.
+
+The existing project has previously reported 277 passing tests. Verify the current repository state rather than assuming that historical test results still apply.
+
+---
+
+# 12. Strict Scope Restrictions
+
+This task is proposal generation only.
+
+DO NOT:
+- Modify production code.
+- Rewrite the existing architecture.
+- Add dependencies.
+- Change existing gesture mappings without documenting the reason.
+- Implement speculative features.
+- Add unnecessary machine-learning models.
+- Introduce unnecessary abstraction layers.
+- Claim performance improvements without benchmarks.
+- Treat FPS as the primary optimization metric.
+- Mark unverified requirements as completed.
+
+If a requirement is unclear, document the ambiguity and propose a technically justified resolution.
+
+---
+
+# 13. Final Proposal Quality Check
+
+Before considering the proposal complete, verify:
+
+- All requirements are measurable.
+- No existing working functionality is unnecessarily duplicated.
+- Performance goals are realistic and measurable.
+- Gesture recognition and command execution are separated.
+- All state transitions are defined.
+- Safety behavior is documented.
+- Hardware tiers are clearly specified.
+- GPU acceleration is benchmark-driven.
+- Testing includes real-world scenarios.
+- OpenSpec files follow the project's installed conventions.
+- No production implementation has been performed.
+
+## Final Instruction
+
+Create an engineering-grade OpenSpec proposal for AirCue.
+
+The proposal must be detailed enough that a separate implementation agent can execute it phase by phase without needing to guess the intended system behavior.
+
+Prioritize correctness, maintainability, low latency, resource efficiency, and reliability.
+
+Do not optimize the proposal for impressive documentation. Optimize it for successful implementation.
+
+also git is initialized so after all the approval you can start by commiting changes done one by one and also make sure when starting to make the project the whole project should be GitHub ready.
+
+When approved by the user when executing the plan then use superpower
