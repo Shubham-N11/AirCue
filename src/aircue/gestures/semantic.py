@@ -17,6 +17,9 @@ class GestureAction(StrEnum):
     ENTER_SCROLL_MODE = "enter_scroll_mode"
     EXIT_SCROLL_MODE = "exit_scroll_mode"
     EXIT_REQUEST = "exit_request"
+    ENTER_POINTER_MODE = "enter_pointer_mode"
+    EXIT_POINTER_MODE = "exit_pointer_mode"
+    CLICK_CANDIDATE = "click_candidate"
 
 
 @dataclass(frozen=True)
