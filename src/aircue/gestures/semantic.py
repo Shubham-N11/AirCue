@@ -20,6 +20,11 @@ class GestureAction(StrEnum):
     ENTER_POINTER_MODE = "enter_pointer_mode"
     EXIT_POINTER_MODE = "exit_pointer_mode"
     CLICK_CANDIDATE = "click_candidate"
+    DOUBLE_CLICK = "double_click"
+    NEXT_SLIDE = "next_slide"
+    PREV_SLIDE = "prev_slide"
+    SCROLL = "scroll"
+    POINTER_MOVEMENT = "pointer_movement"
 
 
 @dataclass(frozen=True)
