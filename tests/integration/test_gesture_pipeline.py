@@ -14,7 +14,10 @@ from aircue.gestures.classifiers import is_pointer_pose
 from aircue.gestures.recognizer import GestureRecognizer
 from aircue.gestures.semantic import GestureAction, SemanticEvent
 from aircue.gestures.vocabulary import GESTURES, Gesture
+from aircue.presentation.target import TargetKind
+from aircue.state.activation import ActivationController, ActivationSource
 from aircue.state.states import InteractionState
+from aircue.state.transitions import TransitionTrigger
 from aircue.vision.features import extract_hand_record
 from aircue.vision.types import (
     INDEX_PIP,
@@ -406,3 +409,59 @@ def test_gesture_modules_import_only_domain_types(module: str) -> None:
     for imported in _imported_modules(path):
         if imported.startswith("aircue."):
             assert imported.startswith(allowed), f"{module}.py imports {imported}"
+
+
+def test_hand_presence_alone_never_activates() -> None:
+    subject = GestureRecognizer(Config())
+    frames = [(timestamp, record()) for timestamp in range(0, 5_000, 100)]
+    events = drive(subject, InteractionState.IDLE, frames)
+    assert [event.action for event in events] == []
+
+
+def test_thumbs_up_hold_drives_an_accepted_activation() -> None:
+    subject = GestureRecognizer(Config())
+    thumbs_up = record(curled=("index", "middle", "ring", "pinky"), thumb_up=True)
+    frames = [(0, thumbs_up), (799, thumbs_up), (800, thumbs_up)]
+    events = drive(subject, InteractionState.IDLE, frames)
+    assert [event.action for event in events] == [GestureAction.ACTIVATE]
+
+    decision = ActivationController().evaluate(
+        InteractionState.IDLE,
+        TargetKind.NORMAL_SLIDESHOW,
+        ActivationSource.GESTURE,
+        target_ready=True,
+    )
+    assert decision.accepted is True
+    assert decision.trigger is TransitionTrigger.ACTIVATION_CONFIRMED
+
+
+def test_thumbs_up_hold_drives_an_accepted_resume() -> None:
+    subject = GestureRecognizer(Config())
+    thumbs_up = record(curled=("index", "middle", "ring", "pinky"), thumb_up=True)
+    frames = [(0, thumbs_up), (249, thumbs_up), (250, thumbs_up)]
+    events = drive(subject, InteractionState.PAUSED, frames)
+    assert [event.action for event in events] == [GestureAction.RESUME_TRACKING]
+
+    decision = ActivationController().evaluate(
+        InteractionState.PAUSED,
+        TargetKind.PRESENTER_VIEW,
+        ActivationSource.GESTURE,
+        target_ready=True,
+    )
+    assert decision.accepted is True
+    assert decision.trigger is TransitionTrigger.RESUME_CONFIRMED
+
+
+def test_activation_is_rejected_for_edit_mode_after_a_valid_hold() -> None:
+    subject = GestureRecognizer(Config())
+    thumbs_up = record(curled=("index", "middle", "ring", "pinky"), thumb_up=True)
+    events = drive(subject, InteractionState.IDLE, [(0, thumbs_up), (800, thumbs_up)])
+    assert [event.action for event in events] == [GestureAction.ACTIVATE]
+
+    decision = ActivationController().evaluate(
+        InteractionState.IDLE,
+        TargetKind.EDIT_MODE,
+        ActivationSource.GESTURE,
+        target_ready=True,
+    )
+    assert decision.accepted is False

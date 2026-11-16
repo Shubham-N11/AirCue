@@ -38,3 +38,8 @@ _CAPABILITIES: dict[TargetKind, TargetCapabilities] = {
 def capabilities_for(kind: TargetKind) -> TargetCapabilities:
     """Capabilities granted by a target kind. Edit mode and unknown grant none."""
     return _CAPABILITIES[kind]
+
+
+def is_activatable(kind: TargetKind) -> bool:
+    """Only an identified slideshow or presenter target may be activated."""
+    return kind in (TargetKind.NORMAL_SLIDESHOW, TargetKind.PRESENTER_VIEW)
