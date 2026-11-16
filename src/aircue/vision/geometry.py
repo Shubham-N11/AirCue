@@ -86,9 +86,7 @@ def finger_extension(
 ) -> tuple[bool | None, ...]:
     """Extension state for thumb, index, middle, ring, and little."""
     usable = usable_landmarks(landmarks, valid)
-    return tuple(
-        _finger_extended(usable, joints, threshold_deg) for joints in _FINGER_JOINTS
-    )
+    return tuple(_finger_extended(usable, joints, threshold_deg) for joints in _FINGER_JOINTS)
 
 
 def hand_openness(extensions: Sequence[bool | None]) -> float | None:

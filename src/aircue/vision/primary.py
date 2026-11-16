@@ -61,9 +61,7 @@ class PrimaryHandSelector:
         self._mark_absent(timestamp_ns)
         return PrimarySelection(None, self._stable_id, suppress_recognition=True)
 
-    def _match_primary(
-        self, observations: tuple[HandObservation, ...]
-    ) -> HandObservation | None:
+    def _match_primary(self, observations: tuple[HandObservation, ...]) -> HandObservation | None:
         if self._last_wrist is None:
             return None
         candidates: list[tuple[float, HandObservation]] = []
