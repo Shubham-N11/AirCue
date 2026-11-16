@@ -38,7 +38,7 @@
 
 ## 4. Interaction State
 
-- [ ] 4.1 Implement the eight-state model and the authoritative transition table as data, transcribed from design.md D3.1 with no additional transitions; verify a table test asserts the exact row set and rejects every unlisted from/trigger pair.
+- [x] 4.1 Implement the eight-state model and the authoritative transition table as data, transcribed from design.md D3.1 with no additional transitions; verify a table test asserts the exact row set and rejects every unlisted from/trigger pair.
 - [ ] 4.2 Implement atomic transition application with previous state, trigger, resulting state, reason, state generation, and monotonic timestamp; verify every accepted transition increments the generation and every rejection is recorded without changing state.
 - [ ] 4.3 Implement the `CommandManager` with target-capability gating and priority order (exit, pause, resume or activation, mode exit, mode entry, navigation, click or double-click, scroll, pointer movement); verify tests cover every state/command pair, including pointer commands rejected in ACTIVE and slide commands rejected in PAUSED.
 - [ ] 4.4 Implement deliberate activation and resume: thumbs-up hold of 800 ms or `Ctrl+Alt+A` in IDLE with a confidently identified target; thumbs-up hold of 250 ms in PAUSED with foreground-validated target; no activation from hand presence alone; activation rejected for EDIT_MODE and UNKNOWN targets, and accepted for PRESENTER_VIEW with navigation-only capabilities.
