@@ -34,7 +34,7 @@
 - [x] 3.8 Implement gesture priority and same-frame conflict resolution in the order exit, pause, resume or activation, mode exit, mode entry, slide navigation, click or double-click, scroll, pointer movement; verify tests cover fist-plus-rotation, exit-plus-anything, click-plus-movement, and contradictory pointer/scroll requests.
 - [x] 3.9 Attach onset frame sequence, onset monotonic timestamp, and confidence to every candidate and confirmed event; verify tests confirm onset is the first frame matching the onset predicate, not the confirmation frame.
 - [x] 3.10 Expose every threshold and window as validated configuration defaulting to design.md D10; verify a config-change test alters recognition behavior without code changes.
-- [ ] 3.11 Run the gesture unit and integration suites; verify a synthetic landmark sequence drives each vocabulary action end to end, no classifier can emit an event for a gesture outside the fixed vocabulary, and the recognizer imports no presentation adapter and cannot synthesize input.
+- [x] 3.11 Run the gesture unit and integration suites; verify a synthetic landmark sequence drives each vocabulary action end to end, no classifier can emit an event for a gesture outside the fixed vocabulary, and the recognizer imports no presentation adapter and cannot synthesize input.
 
 ## 4. Interaction State
 
