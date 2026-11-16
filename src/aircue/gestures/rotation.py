@@ -20,7 +20,9 @@ class RotationDirection(StrEnum):
 class RotationEvent:
     direction: RotationDirection
     delta_deg: float
+    onset_sequence: int
     timestamp_ns: int
+    confidence: float
 
 
 class RotationDetector:
@@ -63,7 +65,13 @@ class RotationDetector:
         self._next_repeat_deg = None
         self._last_event_ts_ns = None
 
-    def update(self, hand: HandRecord | None, timestamp_ns: int) -> RotationEvent | None:
+    def update(
+        self,
+        hand: HandRecord | None,
+        timestamp_ns: int,
+        *,
+        sequence: int = 0,
+    ) -> RotationEvent | None:
         angle = None if hand is None else hand.features.wrist_angle_deg
         if hand is None or angle is None or not is_open_palm(hand):
             self.reset()
@@ -88,7 +96,7 @@ class RotationDetector:
         if not self._active or direction is not self._direction:
             if abs(delta) < self._activation_deg:
                 return None
-            return self._emit(direction, delta, timestamp_ns)
+            return self._emit(direction, delta, timestamp_ns, sequence, hand.confidence)
 
         if not self._continuous_enabled or self._next_repeat_deg is None:
             return None
@@ -103,13 +111,15 @@ class RotationDetector:
         self._prune_event_times(timestamp_ns)
         if len(self._event_times) >= self._max_events_per_second:
             return None
-        return self._emit(direction, delta, timestamp_ns)
+        return self._emit(direction, delta, timestamp_ns, sequence, hand.confidence)
 
     def _emit(
         self,
         direction: RotationDirection,
         delta: float,
         timestamp_ns: int,
+        sequence: int,
+        confidence: float,
     ) -> RotationEvent:
         self._active = True
         self._direction = direction
@@ -118,7 +128,7 @@ class RotationDetector:
         self._next_repeat_deg = (
             abs(delta) + self._repeat_step_deg if self._continuous_enabled else None
         )
-        return RotationEvent(direction, delta, timestamp_ns)
+        return RotationEvent(direction, delta, sequence, timestamp_ns, confidence)
 
     def _prune_event_times(self, timestamp_ns: int) -> None:
         while self._event_times and timestamp_ns - self._event_times[0] >= 1_000_000_000:

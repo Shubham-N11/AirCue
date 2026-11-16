@@ -32,6 +32,7 @@ class SemanticEvent:
     action: GestureAction
     gesture: Gesture
     onset_ns: int
+    onset_sequence: int
     timestamp_ns: int
     confidence: float
 
@@ -120,6 +121,8 @@ class SemanticMapper:
         confidence: float,
         state: InteractionState,
         timestamp_ns: int,
+        *,
+        sequence: int = 0,
     ) -> SemanticEvent | None:
         if state is not self._state:
             self.reset()
@@ -129,13 +132,14 @@ class SemanticMapper:
             return None
         # Gestures without a mapping count as neutral so they cancel a pending hold.
         candidate = gesture if (state, gesture) in _ACTIONS else None
-        confirmed = validator.update(candidate, confidence, timestamp_ns)
+        confirmed = validator.update(candidate, confidence, timestamp_ns, sequence=sequence)
         if confirmed is None:
             return None
         return SemanticEvent(
             action=_ACTIONS[(state, confirmed.gesture)],
             gesture=confirmed.gesture,
             onset_ns=confirmed.onset_ns,
+            onset_sequence=confirmed.onset_sequence,
             timestamp_ns=confirmed.timestamp_ns,
             confidence=confirmed.confidence,
         )

@@ -12,6 +12,7 @@ from aircue.gestures.vocabulary import Gesture
 class ConfirmedGesture:
     gesture: Gesture
     onset_ns: int
+    onset_sequence: int
     timestamp_ns: int
     confidence: float
 
@@ -39,6 +40,7 @@ class TemporalValidator:
         self._confidence_threshold = confidence_threshold
         self._pending: Gesture | None = None
         self._pending_since_ns: int | None = None
+        self._pending_since_sequence = 0
         self._pending_confidence = 0.0
         self._disarmed: Gesture | None = None
         self._different_since_ns: int | None = None
@@ -47,6 +49,7 @@ class TemporalValidator:
     def reset(self) -> None:
         self._pending = None
         self._pending_since_ns = None
+        self._pending_since_sequence = 0
         self._pending_confidence = 0.0
         self._disarmed = None
         self._different_since_ns = None
@@ -57,6 +60,8 @@ class TemporalValidator:
         candidate: Gesture | None,
         confidence: float,
         timestamp_ns: int,
+        *,
+        sequence: int = 0,
     ) -> ConfirmedGesture | None:
         low_confidence = candidate is not None and confidence < self._confidence_threshold
         if low_confidence:
@@ -65,6 +70,7 @@ class TemporalValidator:
         if candidate is not self._pending:
             self._pending = candidate
             self._pending_since_ns = timestamp_ns if candidate is not None else None
+            self._pending_since_sequence = sequence
         if candidate is not None:
             self._pending_confidence = confidence
 
@@ -101,6 +107,7 @@ class TemporalValidator:
         confirmed = ConfirmedGesture(
             gesture=candidate,
             onset_ns=onset_ns,
+            onset_sequence=self._pending_since_sequence,
             timestamp_ns=timestamp_ns,
             confidence=self._pending_confidence,
         )

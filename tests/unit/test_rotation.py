@@ -205,3 +205,12 @@ def test_reset_clears_repeat_state() -> None:
     rotation.reset()
     assert rotation.update(hand(-60.0), 2_000_000) is None
     assert rotation.update(hand(-90.0), 3_000_000) is not None
+
+
+def test_event_carries_the_current_frame_sequence() -> None:
+    rotation = detector()
+    rotation.update(hand(0.0), 0, sequence=60)
+    event = rotation.update(hand(-30.0), 33_000_000, sequence=61)
+    assert event is not None
+    assert event.onset_sequence == 61
+    assert event.confidence == pytest.approx(0.9)

@@ -243,3 +243,20 @@ def test_any_distance_below_close_threshold_can_initiate(distance: float) -> Non
     cycle = machine()
     assert cycle.update(hand(distance), 0) is None
     assert cycle.update(hand(distance), ms(100)) is not None
+
+
+def test_events_carry_the_onset_frame_sequence() -> None:
+    cycle = machine()
+    assert cycle.update(hand(0.20), 0, sequence=30) is None
+    initiated = cycle.update(hand(0.20), ms(100), sequence=31)
+    assert initiated is not None
+    assert initiated.onset_ns == 0
+    assert initiated.onset_sequence == 30
+    assert initiated.confidence == pytest.approx(0.9)
+
+    assert cycle.update(hand(0.33), ms(200), sequence=32) is None
+    released = cycle.update(hand(0.33), ms(300), sequence=33)
+    assert released is not None
+    assert released.onset_ns == ms(200)
+    assert released.onset_sequence == 32
+    assert released.confidence == pytest.approx(0.9)

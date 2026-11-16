@@ -161,3 +161,23 @@ def test_reset_clears_confirmation_and_rearm_state() -> None:
     assert validator.update(Gesture.FIST, 0.9, ms(200)) is None
     event = validator.update(Gesture.FIST, 0.9, ms(300))
     assert event is not None
+
+
+def test_onset_sequence_is_the_first_matching_frame() -> None:
+    validator = make_validator()
+    assert validator.update(Gesture.FIST, 0.9, 0, sequence=10) is None
+    assert validator.update(Gesture.FIST, 0.9, ms(100), sequence=11) is None
+    event = validator.update(Gesture.FIST, 0.9, ms(200), sequence=12)
+    assert event is not None
+    assert event.onset_ns == 0
+    assert event.onset_sequence == 10
+
+
+def test_onset_sequence_restarts_after_a_pose_change() -> None:
+    validator = make_validator()
+    validator.update(Gesture.FIST, 0.9, 0, sequence=10)
+    validator.update(Gesture.PEACE, 0.9, ms(50), sequence=11)
+    validator.update(Gesture.FIST, 0.9, ms(100), sequence=12)
+    event = validator.update(Gesture.FIST, 0.9, ms(300), sequence=14)
+    assert event is not None
+    assert event.onset_sequence == 12

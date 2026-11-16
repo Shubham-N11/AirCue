@@ -6,7 +6,7 @@ from aircue.gestures.vocabulary import Gesture
 
 
 def event(action: GestureAction) -> SemanticEvent:
-    return SemanticEvent(action, Gesture.FIST, 0, 0, 0.9)
+    return SemanticEvent(action, Gesture.FIST, 0, 0, 0, 0.9)
 
 
 def test_every_action_has_a_distinct_rank() -> None:

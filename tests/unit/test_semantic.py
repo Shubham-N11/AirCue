@@ -214,3 +214,23 @@ def test_reset_clears_pending_and_confirmed_state() -> None:
     assert subject.update(Gesture.THUMBS_UP, 0.9, InteractionState.IDLE, ms(900)) is None
     assert subject.update(Gesture.THUMBS_UP, 0.9, InteractionState.IDLE, ms(1699)) is None
     assert subject.update(Gesture.THUMBS_UP, 0.9, InteractionState.IDLE, ms(1700)) is not None
+
+
+def test_onset_sequence_is_the_first_frame_of_the_hold() -> None:
+    subject = mapper()
+    assert (
+        subject.update(Gesture.THUMBS_UP, 0.9, InteractionState.IDLE, 0, sequence=20)
+        is None
+    )
+    assert (
+        subject.update(
+            Gesture.THUMBS_UP, 0.9, InteractionState.IDLE, ms(400), sequence=21
+        )
+        is None
+    )
+    event = subject.update(
+        Gesture.THUMBS_UP, 0.9, InteractionState.IDLE, ms(800), sequence=22
+    )
+    assert event is not None
+    assert event.onset_ns == 0
+    assert event.onset_sequence == 20

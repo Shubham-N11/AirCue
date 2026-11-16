@@ -28,8 +28,10 @@ class PinchEventKind(StrEnum):
 class PinchEvent:
     kind: PinchEventKind
     onset_ns: int
+    onset_sequence: int
     timestamp_ns: int
     distance: float
+    confidence: float
     held_ns: int | None = None
 
 
@@ -59,7 +61,10 @@ class PinchStateMachine:
         self._rearm_ns = rearm_confirm_ms * 1_000_000
         self._state = PinchState.ARMED
         self._pending_since_ns: int | None = None
+        self._pending_since_sequence = 0
         self._pinched_since_ns: int | None = None
+        self._sequence = 0
+        self._confidence = 0.0
 
     @property
     def state(self) -> PinchState:
@@ -72,7 +77,10 @@ class PinchStateMachine:
     def reset(self) -> None:
         self._state = PinchState.ARMED
         self._pending_since_ns = None
+        self._pending_since_sequence = 0
         self._pinched_since_ns = None
+        self._sequence = 0
+        self._confidence = 0.0
 
     def pinched_ns(self, timestamp_ns: int) -> int | None:
         """Time since the pinch was confirmed, or None when not pinched."""
@@ -80,7 +88,15 @@ class PinchStateMachine:
             return None
         return timestamp_ns - self._pinched_since_ns
 
-    def update(self, hand: HandRecord | None, timestamp_ns: int) -> PinchEvent | None:
+    def update(
+        self,
+        hand: HandRecord | None,
+        timestamp_ns: int,
+        *,
+        sequence: int = 0,
+    ) -> PinchEvent | None:
+        self._sequence = sequence
+        self._confidence = 0.0 if hand is None else hand.confidence
         distance = None if hand is None else hand.features.pinch_distance
         if distance is None:
             self._suspend()
@@ -102,6 +118,7 @@ class PinchStateMachine:
             return None
         self._state = PinchState.CLOSING
         self._pending_since_ns = timestamp_ns
+        self._pending_since_sequence = self._sequence
         return self._update_closing(distance, timestamp_ns)
 
     def _update_closing(self, distance: float, timestamp_ns: int) -> PinchEvent | None:
@@ -116,7 +133,14 @@ class PinchStateMachine:
         self._state = PinchState.PINCHED
         self._pending_since_ns = None
         self._pinched_since_ns = timestamp_ns
-        return PinchEvent(PinchEventKind.INITIATED, onset_ns, timestamp_ns, distance)
+        return PinchEvent(
+            PinchEventKind.INITIATED,
+            onset_ns,
+            self._pending_since_sequence,
+            timestamp_ns,
+            distance,
+            self._confidence,
+        )
 
     def _update_pinched(self, distance: float, timestamp_ns: int) -> PinchEvent | None:
         if distance <= self._release_threshold:
@@ -124,6 +148,7 @@ class PinchStateMachine:
             return None
         self._state = PinchState.RELEASING
         self._pending_since_ns = timestamp_ns
+        self._pending_since_sequence = self._sequence
         return self._update_releasing(distance, timestamp_ns)
 
     def _update_releasing(self, distance: float, timestamp_ns: int) -> PinchEvent | None:
@@ -142,7 +167,13 @@ class PinchStateMachine:
         self._pending_since_ns = None
         self._pinched_since_ns = None
         return PinchEvent(
-            PinchEventKind.RELEASED, onset_ns, timestamp_ns, distance, held_ns
+            PinchEventKind.RELEASED,
+            onset_ns,
+            self._pending_since_sequence,
+            timestamp_ns,
+            distance,
+            self._confidence,
+            held_ns,
         )
 
     def _update_awaiting_rearm(
@@ -197,6 +228,7 @@ class PinchGestureRecognizer:
         )
         self._long_pinch_ns = long_pinch_ms * 1_000_000
         self._pinch_onset_ns: int | None = None
+        self._pinch_onset_sequence = 0
         self._pinch_confirmed_ns: int | None = None
         self._entry_pinch = False
         self._long_pinch = False
@@ -208,6 +240,7 @@ class PinchGestureRecognizer:
     def reset(self) -> None:
         self._machine.reset()
         self._pinch_onset_ns = None
+        self._pinch_onset_sequence = 0
         self._pinch_confirmed_ns = None
         self._entry_pinch = False
         self._long_pinch = False
@@ -217,12 +250,15 @@ class PinchGestureRecognizer:
         hand: HandRecord | None,
         state: InteractionState,
         timestamp_ns: int,
+        *,
+        sequence: int = 0,
     ) -> SemanticEvent | None:
-        event = self._machine.update(hand, timestamp_ns)
+        event = self._machine.update(hand, timestamp_ns, sequence=sequence)
         confidence = 0.0 if hand is None else hand.confidence
 
         if event is not None and event.kind is PinchEventKind.INITIATED:
             self._pinch_onset_ns = event.onset_ns
+            self._pinch_onset_sequence = event.onset_sequence
             self._pinch_confirmed_ns = event.timestamp_ns
             self._entry_pinch = False
             self._long_pinch = False
@@ -232,6 +268,7 @@ class PinchGestureRecognizer:
                     GestureAction.ENTER_POINTER_MODE,
                     Gesture.PINCH,
                     event.onset_ns,
+                    event.onset_sequence,
                     timestamp_ns,
                     confidence,
                 )
@@ -255,6 +292,7 @@ class PinchGestureRecognizer:
             GestureAction.EXIT_POINTER_MODE,
             Gesture.PINCH,
             onset_ns,
+            self._pinch_onset_sequence,
             timestamp_ns,
             confidence,
         )
@@ -266,9 +304,11 @@ class PinchGestureRecognizer:
         long_pinch = self._long_pinch
         confirmed_ns = self._pinch_confirmed_ns
         onset_ns = self._pinch_onset_ns
+        onset_sequence = self._pinch_onset_sequence
         self._entry_pinch = False
         self._long_pinch = False
         self._pinch_onset_ns = None
+        self._pinch_onset_sequence = 0
         self._pinch_confirmed_ns = None
         if state is not InteractionState.POINTER_MODE:
             return None
@@ -279,6 +319,7 @@ class PinchGestureRecognizer:
                 GestureAction.EXIT_POINTER_MODE,
                 Gesture.PINCH,
                 event.onset_ns if onset_ns is None else onset_ns,
+                onset_sequence,
                 event.timestamp_ns,
                 confidence,
             )
@@ -286,6 +327,7 @@ class PinchGestureRecognizer:
             GestureAction.CLICK_CANDIDATE,
             Gesture.PINCH_RELEASE,
             event.onset_ns,
+            event.onset_sequence,
             event.timestamp_ns,
             confidence,
         )
@@ -295,7 +337,10 @@ class PinchGestureRecognizer:
         action: GestureAction,
         gesture: Gesture,
         onset_ns: int,
+        onset_sequence: int,
         timestamp_ns: int,
         confidence: float,
     ) -> SemanticEvent:
-        return SemanticEvent(action, gesture, onset_ns, timestamp_ns, confidence)
+        return SemanticEvent(
+            action, gesture, onset_ns, onset_sequence, timestamp_ns, confidence
+        )

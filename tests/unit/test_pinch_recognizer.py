@@ -219,3 +219,32 @@ def test_reset_clears_consumption_flags() -> None:
     subject.reset()
     assert subject.pinch_state.value == "armed"
     assert start_pinch(subject, InteractionState.ACTIVE, ms(200)) is not None
+
+
+def test_mode_entry_reports_the_pinch_onset_sequence() -> None:
+    subject = recognizer()
+    assert subject.update(hand(0.20), InteractionState.ACTIVE, 0, sequence=40) is None
+    event = subject.update(
+        hand(0.20), InteractionState.ACTIVE, ms(100), sequence=41
+    )
+    assert event is not None
+    assert event.onset_sequence == 40
+
+
+def test_click_candidate_reports_the_release_onset_sequence() -> None:
+    subject = recognizer()
+    assert subject.update(hand(0.20), InteractionState.POINTER_MODE, 0, sequence=50) is None
+    assert (
+        subject.update(hand(0.20), InteractionState.POINTER_MODE, ms(100), sequence=51)
+        is None
+    )
+    assert (
+        subject.update(hand(0.33), InteractionState.POINTER_MODE, ms(200), sequence=52)
+        is None
+    )
+    event = subject.update(
+        hand(0.33), InteractionState.POINTER_MODE, ms(300), sequence=53
+    )
+    assert event is not None
+    assert event.onset_ns == ms(200)
+    assert event.onset_sequence == 52
