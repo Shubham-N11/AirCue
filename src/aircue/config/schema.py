@@ -103,6 +103,8 @@ class CameraConfig:
 class VisionConfig:
     confidence_threshold: float = _bounded(0.5, minimum=0.0, maximum=1.0)
     max_hands: int = _bounded(2, minimum=1)
+    primary_match_distance: float = _bounded(0.35, minimum=0.0, maximum=2.0)
+    model_path: str = ""
 
 
 @dataclass(frozen=True)

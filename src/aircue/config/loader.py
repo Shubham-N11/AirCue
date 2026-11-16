@@ -72,9 +72,7 @@ def _construct(dc_type: type[Any], data: dict[str, Any], source: str) -> Any:
     return dc_type(**values)
 
 
-def _coerce(
-    value: Any, expected: type, metadata: Mapping[str, Any], source: str, path: str
-) -> Any:
+def _coerce(value: Any, expected: type, metadata: Mapping[str, Any], source: str, path: str) -> Any:
     if expected is bool:
         if not isinstance(value, bool):
             raise ConfigError(f"{source}: {path} must be a boolean")
@@ -111,9 +109,7 @@ def _coerce(
 def _validate_cross_fields(config: Config, source: str) -> None:
     pinch = config.pinch
     if not pinch.close_threshold < pinch.release_threshold < pinch.rearm_threshold:
-        raise ConfigError(
-            f"{source}: pinch thresholds must increase: close < release < rearm"
-        )
+        raise ConfigError(f"{source}: pinch thresholds must increase: close < release < rearm")
     pointer = config.pointer
     if pointer.smoothing_min_alpha > pointer.smoothing_max_alpha:
         raise ConfigError(
