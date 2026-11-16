@@ -44,7 +44,8 @@ reference will be added with the runtime.
 
 ## Documentation
 
-- [Vision pipeline](docs/vision-pipeline.md) - planned
+- [Vision pipeline](docs/vision-pipeline.md)
+- [Tracker selection](docs/tracker-selection.md)
 - [Presentation integration](docs/presentation-integration.md) - planned
 
 ## License
