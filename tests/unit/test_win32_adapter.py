@@ -308,7 +308,25 @@ def test_blocked_send_is_reported_as_input_blocked() -> None:
     sink.accepted = False
     result = subject.execute(NEXT)
     assert result.error is AdapterError.INPUT_BLOCKED
+    assert "higher-integrity" in result.detail
     assert len(sink.calls) == 1
+
+
+def test_rejection_diagnostics_list_every_candidate_field() -> None:
+    subject, api, sink, _ = ready()
+    api.foreground = 0
+    result = subject.execute(NEXT)
+
+    assert result.error is AdapterError.FOCUS_LOST
+    for field in (
+        f"pid={PID}",
+        f"class={SLIDESHOW_CLASS!r}",
+        "title='Deck'",
+        "foreground=False",
+        "monitor=ScreenRect(left=0, top=0, right=1920, bottom=1080)",
+    ):
+        assert field in result.detail
+    assert sink.calls == []
 
 
 def test_pointer_outside_the_revalidated_monitor_rejects_without_input() -> None:
