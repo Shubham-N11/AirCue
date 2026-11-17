@@ -43,3 +43,33 @@ def capabilities_for(kind: TargetKind) -> TargetCapabilities:
 def is_activatable(kind: TargetKind) -> bool:
     """Only an identified slideshow or presenter target may be activated."""
     return kind in (TargetKind.NORMAL_SLIDESHOW, TargetKind.PRESENTER_VIEW)
+
+
+@dataclass(frozen=True)
+class MonitorBounds:
+    """A monitor rectangle in virtual-screen coordinates."""
+
+    left: int
+    top: int
+    right: int
+    bottom: int
+
+
+@dataclass(frozen=True)
+class TargetSnapshot:
+    """A point-in-time description of the presentation target."""
+
+    captured_ns: int
+    kind: TargetKind = TargetKind.UNKNOWN
+    capabilities: TargetCapabilities = TargetCapabilities()
+    process_id: int | None = None
+    window_handle: int | None = None
+    output_handle: int | None = None
+    monitor_bounds: MonitorBounds | None = None
+    title: str | None = None
+
+    def __post_init__(self) -> None:
+        expected = capabilities_for(self.kind)
+        if self.capabilities != expected:
+            raise ValueError(f"{self.kind.value} must expose {expected}, not {self.capabilities}")
+

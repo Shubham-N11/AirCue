@@ -50,7 +50,7 @@
 
 ## 5. Presentation Adapter
 
-- [ ] 5.1 Define the presentation adapter protocol, validated command payloads, target snapshot type, and structured result/error types; verify contract tests prove the domain layer imports no PowerPoint or Win32 code.
+- [x] 5.1 Define the presentation adapter protocol, validated command payloads, target snapshot type, and structured result/error types; verify contract tests prove the domain layer imports no PowerPoint or Win32 code.
 - [ ] 5.2 Implement Win32 process and top-level-window discovery for `POWERPNT.EXE`, including process ownership, foreground status, visibility, window class/title signals, and monitor bounds; verify mocked-API tests cover no PowerPoint, access failure, one process, multiple processes, and hidden windows.
 - [ ] 5.3 Implement target classification into NORMAL_SLIDESHOW, PRESENTER_VIEW, EDIT_MODE, and UNKNOWN, including presenter-console/output pairing, extended-display monitor mapping, multiple-monitor ambiguity, and edit-mode detection; verify mocked-API tests cover each kind, two ambiguous slideshow candidates, and an unpaired presenter console.
 - [ ] 5.4 Implement the target snapshot cache with process ID, window handle or handles, target kind, capabilities, monitor bounds, and capture time; refresh at least every 250 ms, treat anything older than 1,000 ms as UNKNOWN, and pause dispatch on staleness. Verify fake-clock tests cover fresh, stale, and refreshed snapshots.
