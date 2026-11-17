@@ -161,3 +161,45 @@ def test_cleanup_completed_cannot_run_twice() -> None:
 def test_initial_state_can_be_injected(state: InteractionState) -> None:
     assert machine().state is S.INITIALIZING
     assert machine(state).state is state
+
+
+@pytest.mark.parametrize(
+    ("source", "trigger"),
+    [(row.source, row.trigger) for row in TRANSITIONS],
+)
+def test_every_accepted_transition_invalidates_earlier_generations(
+    source: InteractionState, trigger: TransitionTrigger
+) -> None:
+    subject = machine(source)
+    previous = subject.generation
+    assert subject.is_stale(previous) is False
+
+    record = subject.apply(trigger, 0)
+    assert record.accepted is True
+    assert record.generation == previous + 1
+    assert subject.is_stale(previous) is True
+    assert subject.is_stale(record.generation) is False
+
+
+def test_rejected_transition_does_not_invalidate_the_current_generation() -> None:
+    subject = machine()
+    assert subject.apply(T.INITIALIZATION_SUCCEEDED, 0).accepted is True
+    current = subject.generation
+
+    assert subject.apply(T.RESUME_CONFIRMED, 1).accepted is False
+    assert subject.is_stale(current) is False
+
+
+@pytest.mark.parametrize(
+    "state", [state for state in InteractionState if state is not S.EXITING]
+)
+def test_exit_shortcut_reaches_exiting_from_every_other_state(
+    state: InteractionState,
+) -> None:
+    subject = machine(state)
+    record = subject.apply(T.EXIT_REQUEST, 0)
+    assert record.accepted is True
+    assert record.resulting is S.EXITING
+    assert subject.state is S.EXITING
+    assert record.generation == 1
+

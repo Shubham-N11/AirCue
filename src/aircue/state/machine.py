@@ -53,6 +53,10 @@ class StateMachine:
     def terminated(self) -> bool:
         return self._terminated
 
+    def is_stale(self, generation: int) -> bool:
+        """True when work captured under this generation must not be dispatched."""
+        return generation != self._generation
+
     def apply(
         self,
         trigger: TransitionTrigger,
