@@ -157,6 +157,7 @@ def test_domain_layer_imports_no_win32_or_powerpoint_code() -> None:
     source = Path(__file__).resolve().parents[2] / "src" / "aircue"
     paths = [
         source / "presentation" / "adapter.py",
+        source / "presentation" / "cache.py",
         source / "presentation" / "classify.py",
         source / "presentation" / "discovery.py",
         source / "presentation" / "target.py",
