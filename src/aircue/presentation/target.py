@@ -46,8 +46,8 @@ def is_activatable(kind: TargetKind) -> bool:
 
 
 @dataclass(frozen=True)
-class MonitorBounds:
-    """A monitor rectangle in virtual-screen coordinates."""
+class ScreenRect:
+    """A screen-space rectangle in virtual-screen coordinates."""
 
     left: int
     top: int
@@ -65,7 +65,7 @@ class TargetSnapshot:
     process_id: int | None = None
     window_handle: int | None = None
     output_handle: int | None = None
-    monitor_bounds: MonitorBounds | None = None
+    monitor_bounds: ScreenRect | None = None
     title: str | None = None
 
     def __post_init__(self) -> None:

@@ -19,7 +19,7 @@ from aircue.presentation.adapter import (
     SlideDirection,
 )
 from aircue.presentation.target import (
-    MonitorBounds,
+    ScreenRect,
     TargetCapabilities,
     TargetKind,
     TargetSnapshot,
@@ -112,7 +112,7 @@ def test_snapshot_capabilities_must_match_the_target_kind(kind: TargetKind) -> N
 
 
 def test_snapshot_records_handles_bounds_and_title() -> None:
-    bounds = MonitorBounds(left=1920, top=0, right=3840, bottom=1080)
+    bounds = ScreenRect(left=1920, top=0, right=3840, bottom=1080)
     snapshot = TargetSnapshot(
         captured_ns=10,
         kind=TargetKind.PRESENTER_VIEW,
