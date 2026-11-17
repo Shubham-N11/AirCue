@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
+from enum import StrEnum
 
-from aircue.presentation.target import ScreenRect
+from aircue.commands.commands import Command, CommandRejection
+from aircue.commands.manager import CommandManager
+from aircue.presentation.target import ScreenRect, TargetCapabilities
+from aircue.state.states import InteractionState
 
 # Normalized units per second that count as a deliberate fast hand movement.
 _FAST_SPEED = 1.5
@@ -47,6 +52,54 @@ def map_pointer(
     nx = _clamp(dx * sensitivity / half_range)
     ny = _clamp(dy * sensitivity / half_range)
     return _point(monitor, nx, ny)
+
+
+class PointerRejection(StrEnum):
+    STATE = "state"
+    CAPABILITY = "capability"
+    POSE = "pose"
+    CLOSED_PINCH = "closed_pinch"
+    PENDING_CLICK = "pending_click"
+
+
+@dataclass(frozen=True)
+class PointerDecision:
+    """Whether a pointer sample may move the cursor; it carries no other effect."""
+
+    rejection: PointerRejection | None = None
+    reason: str = ""
+
+    @property
+    def allowed(self) -> bool:
+        return self.rejection is None
+
+
+def check_pointer_movement(
+    manager: CommandManager,
+    state: InteractionState,
+    capabilities: TargetCapabilities,
+    *,
+    pointer_valid: bool,
+    pinch_closed: bool,
+    click_pending: bool,
+) -> PointerDecision:
+    """Gate one pointer sample, reusing the command table for state and capability."""
+    command = manager.validate(Command.POINTER_MOVE, state, capabilities)
+    if command.rejection is CommandRejection.STATE:
+        return PointerDecision(PointerRejection.STATE, command.reason)
+    if command.rejection is CommandRejection.CAPABILITY:
+        return PointerDecision(PointerRejection.CAPABILITY, command.reason)
+    if not pointer_valid:
+        return PointerDecision(PointerRejection.POSE, "the pointer pose is not valid")
+    if pinch_closed:
+        return PointerDecision(
+            PointerRejection.CLOSED_PINCH, "a closed pinch suppresses pointer movement"
+        )
+    if click_pending:
+        return PointerDecision(
+            PointerRejection.PENDING_CLICK, "a pending click freezes pointer movement"
+        )
+    return PointerDecision()
 
 
 class PointerSmoother:
