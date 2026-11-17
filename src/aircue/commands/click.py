@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
+
+from aircue.gestures.semantic import GestureAction, SemanticEvent
+from aircue.gestures.vocabulary import Gesture
+from aircue.state.machine import StateMachine, TransitionRecord
+from aircue.state.states import InteractionState
+from aircue.state.transitions import TransitionTrigger
 
 
 class ClickDispatch(StrEnum):
@@ -47,3 +54,53 @@ class ClickArbiter:
     def cancel(self) -> None:
         """Drop a pending click without dispatching it."""
         self._deadline_ns = None
+
+
+@dataclass(frozen=True)
+class ClickUpdate:
+    dispatch: ClickDispatch | None = None
+    transition: TransitionRecord | None = None
+
+
+class ClickController:
+    """Applies click-related gesture events to the arbiter and state machine.
+
+    Long pinch owns the click policy: it cancels a pending click and applies the
+    LONG_PINCH row, which exits POINTER_MODE to ACTIVE. Its release produces no
+    candidate, so nothing is dispatched after the exit.
+    """
+
+    def __init__(
+        self, machine: StateMachine, *, double_click_window_ms: int = 350
+    ) -> None:
+        self._machine = machine
+        self._arbiter = ClickArbiter(double_click_window_ms=double_click_window_ms)
+
+    @property
+    def pending(self) -> bool:
+        return self._arbiter.pending
+
+    def on_event(self, event: SemanticEvent) -> ClickUpdate:
+        if event.action is GestureAction.CLICK_CANDIDATE:
+            if self._machine.state is not InteractionState.POINTER_MODE:
+                return ClickUpdate()
+            return ClickUpdate(dispatch=self._arbiter.candidate(event.timestamp_ns))
+        if (
+            event.action is GestureAction.EXIT_POINTER_MODE
+            and event.gesture is Gesture.PINCH
+        ):
+            self._arbiter.cancel()
+            return ClickUpdate(
+                transition=self._machine.apply(
+                    TransitionTrigger.LONG_PINCH,
+                    event.timestamp_ns,
+                    reason="long pinch",
+                )
+            )
+        return ClickUpdate()
+
+    def advance(self, now_ns: int) -> ClickDispatch | None:
+        return self._arbiter.advance(now_ns)
+
+    def cancel(self) -> None:
+        self._arbiter.cancel()
