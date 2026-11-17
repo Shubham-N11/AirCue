@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from aircue.presentation.target import ScreenRect
-from aircue.presentation.win32 import (
+from aircue.presentation.discovery import (
     DiscoveryResult,
     PowerPointDiscovery,
     ProcessInfo,
     WindowCandidate,
 )
+from aircue.presentation.target import ScreenRect
 
 PID = 100
 PRIMARY = ScreenRect(0, 0, 1920, 1080)
