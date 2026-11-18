@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from aircue.config.schema import Config
 from aircue.gestures.classifiers import is_fist, is_peace, is_shaka, is_thumbs_up
-from aircue.gestures.pinch import PinchGestureRecognizer
+from aircue.gestures.pinch import PinchGestureRecognizer, PinchState
 from aircue.gestures.priority import select_highest
 from aircue.gestures.rotation import RotationDetector, RotationDirection, RotationEvent
 from aircue.gestures.semantic import (
@@ -67,6 +67,11 @@ class GestureRecognizer:
             repeat_interval_ms=config.rotation.repeat_interval_ms,
             max_events_per_second=config.rotation.max_events_per_second,
         )
+
+    @property
+    def pinch_closed(self) -> bool:
+        """True while the pinch confirmed closed and has not been released."""
+        return self._pinch.pinch_state is PinchState.PINCHED
 
     def reset(self) -> None:
         self._semantic.reset()

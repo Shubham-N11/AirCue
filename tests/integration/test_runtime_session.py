@@ -1,0 +1,526 @@
+"""The four-thread runtime: states, modes, and every command end to end."""
+
+from __future__ import annotations
+
+import math
+import threading
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+
+import numpy as np
+
+from aircue.app.runtime import AirCueRuntime
+from aircue.capture.types import CaptureOpenResult, Frame
+from aircue.config.schema import Config
+from aircue.gestures.semantic import GestureAction, SemanticEvent
+from aircue.gestures.vocabulary import Gesture
+from aircue.presentation.adapter import (
+    AdapterError,
+    AdapterResult,
+    Click,
+    CommandPayload,
+    DoubleClick,
+    Navigate,
+    PointerMove,
+    Scroll,
+    SlideDirection,
+)
+from aircue.presentation.target import (
+    ScreenRect,
+    TargetKind,
+    TargetSnapshot,
+    capabilities_for,
+)
+from aircue.state.states import InteractionState
+from aircue.vision.types import (
+    INDEX_MCP,
+    INDEX_PIP,
+    INDEX_TIP,
+    MIDDLE_MCP,
+    MIDDLE_PIP,
+    MIDDLE_TIP,
+    PINKY_PIP,
+    PINKY_TIP,
+    RING_PIP,
+    RING_TIP,
+    THUMB_IP,
+    THUMB_TIP,
+    HandObservation,
+)
+from tests.fixtures.landmarks import BASE_POSE, make_landmarks
+
+S = InteractionState
+MS = 1_000_000
+MONITOR = ScreenRect(0, 0, 1920, 1080)
+
+
+def at(clock: Clock, milliseconds: int) -> int:
+    clock.now = milliseconds * MS
+    return clock.now
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 0
+
+    def __call__(self) -> int:
+        return self.now
+
+
+class FakeSource:
+    def __init__(self) -> None:
+        self.mode = None
+        self.closed = False
+
+    def open(self, mode):
+        self.mode = mode
+        return CaptureOpenResult(mode, mode, ())
+
+    def read(self) -> Frame:
+        raise AssertionError("the fake source is not read in this test")
+
+    def close(self) -> None:
+        self.closed = True
+        self.mode = None
+
+
+class SpinningSource(FakeSource):
+    """A source the capture thread can run against without a camera."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sequence = 0
+
+    def read(self) -> Frame:
+        time.sleep(0.002)
+        self.sequence += 1
+        return Frame(np.zeros((2, 2, 3), np.uint8), time.monotonic_ns(), self.sequence)
+
+
+class FakeTracker:
+    def __init__(self, observations: tuple[HandObservation, ...] = ()) -> None:
+        self.observations = observations
+        self.detects = 0
+        self.closed = False
+
+    def detect(self, frame: Frame) -> tuple[HandObservation, ...]:
+        self.detects += 1
+        return self.observations
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeAdapter:
+    def __init__(self, kind: TargetKind = TargetKind.NORMAL_SLIDESHOW) -> None:
+        self.kind = kind
+        self.executed: list[CommandPayload] = []
+        self.error: AdapterError | None = None
+
+    def snapshot(self) -> TargetSnapshot:
+        return TargetSnapshot(
+            captured_ns=0,
+            kind=self.kind,
+            capabilities=capabilities_for(self.kind),
+            monitor_bounds=MONITOR,
+        )
+
+    def refresh(self) -> TargetSnapshot:
+        return self.snapshot()
+
+    def execute(self, payload: CommandPayload) -> AdapterResult:
+        self.executed.append(payload)
+        return AdapterResult(self.error)
+
+
+@contextmanager
+def session(
+    kind: TargetKind = TargetKind.NORMAL_SLIDESHOW,
+    observations: tuple[HandObservation, ...] = (),
+) -> Iterator[tuple[AirCueRuntime, FakeAdapter, Clock, FakeTracker]]:
+    clock = Clock()
+    adapter = FakeAdapter(kind)
+    tracker = FakeTracker(observations)
+    runtime = AirCueRuntime(
+        Config(),
+        source=FakeSource(),
+        tracker=tracker,
+        adapter=adapter,
+        clock_ns=clock,
+    )
+    assert runtime.initialize().accepted is True
+    assert runtime.worker is not None
+    runtime.worker.start()
+    try:
+        yield runtime, adapter, clock, tracker
+    finally:
+        runtime.close()
+
+
+def event(action: GestureAction, milliseconds: int, gesture: Gesture) -> SemanticEvent:
+    timestamp = milliseconds * MS
+    return SemanticEvent(
+        action=action,
+        gesture=gesture,
+        onset_ns=timestamp,
+        onset_sequence=0,
+        timestamp_ns=timestamp,
+        confidence=0.9,
+    )
+
+
+def activate(runtime: AirCueRuntime, milliseconds: int) -> None:
+    record = runtime.handle_event(
+        event(GestureAction.ACTIVATE, milliseconds, Gesture.THUMBS_UP)
+    )
+    assert record is not None and record.accepted is True
+
+
+def wait_for(predicate, description: str, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.002)
+    raise AssertionError(f"timed out waiting for {description}")
+
+
+def test_initializing_reaches_idle_and_a_confirmed_thumbs_up_activates() -> None:
+    with session() as (runtime, _adapter, _clock, _tracker):
+        assert runtime.state is S.IDLE
+
+        record = runtime.handle_event(
+            event(GestureAction.ACTIVATE, 100, Gesture.THUMBS_UP)
+        )
+
+        assert record is not None and record.accepted is True
+        assert runtime.state is S.ACTIVE
+        assert runtime.feedback.status.state is S.ACTIVE
+
+
+def test_activation_without_a_slideshow_target_is_rejected() -> None:
+    for kind in (TargetKind.EDIT_MODE, TargetKind.UNKNOWN):
+        with session(kind=kind) as (runtime, _adapter, _clock, _tracker):
+            assert (
+                runtime.handle_event(
+                    event(GestureAction.ACTIVATE, 100, Gesture.THUMBS_UP)
+                )
+                is None
+            )
+            assert runtime.state is S.IDLE
+
+
+def test_presenter_view_navigates_but_rejects_pointer_and_scroll_modes() -> None:
+    with session(kind=TargetKind.PRESENTER_VIEW) as (runtime, adapter, _clock, _t):
+        activate(runtime, 100)
+        assert runtime.state is S.ACTIVE
+
+        runtime.handle_event(
+            event(GestureAction.NEXT_SLIDE, 200, Gesture.OPEN_PALM_CLOCKWISE)
+        )
+        wait_for(
+            lambda: adapter.executed == [Navigate(SlideDirection.NEXT)],
+            "PresenterView navigation",
+        )
+
+        assert (
+            runtime.handle_event(
+                event(GestureAction.ENTER_POINTER_MODE, 300, Gesture.PINCH)
+            )
+            is None
+        )
+        assert (
+            runtime.handle_event(
+                event(GestureAction.ENTER_SCROLL_MODE, 400, Gesture.PEACE)
+            )
+            is None
+        )
+        assert runtime.state is S.ACTIVE
+
+
+def test_both_rotation_directions_reach_the_adapter() -> None:
+    with session() as (runtime, adapter, _clock, _tracker):
+        activate(runtime, 100)
+        runtime.handle_event(
+            event(GestureAction.NEXT_SLIDE, 200, Gesture.OPEN_PALM_CLOCKWISE)
+        )
+        runtime.handle_event(
+            event(GestureAction.PREV_SLIDE, 300, Gesture.OPEN_PALM_COUNTERCLOCKWISE)
+        )
+
+        wait_for(
+            lambda: adapter.executed
+            == [Navigate(SlideDirection.NEXT), Navigate(SlideDirection.PREVIOUS)],
+            "navigation in both directions",
+        )
+
+
+def curled_tip(mcp: int, pip: int, length: float = 0.08) -> tuple[float, float, float, float]:
+    mcp_x, mcp_y, _ = BASE_POSE[mcp]
+    pip_x, pip_y, _ = BASE_POSE[pip]
+    dx, dy = mcp_x - pip_x, mcp_y - pip_y
+    norm = math.hypot(dx, dy)
+    return (pip_x + dx / norm * length, pip_y + dy / norm * length, 0.0, 0.9)
+
+
+def pointer_observation(
+    x: float = 0.45, y: float = 0.30, *, confidence: float = 0.9
+) -> HandObservation:
+    mcp_x, mcp_y, _ = BASE_POSE[INDEX_MCP]
+    dx, dy = x - mcp_x, y - mcp_y
+    index_pip = (mcp_x + 0.3 * dx, mcp_y + 0.3 * dy, 0.0, confidence)
+    overrides = {
+        THUMB_IP: (0.40, 0.55, 0.0, confidence),
+        THUMB_TIP: (0.4727, 0.4227, 0.0, confidence),
+        INDEX_PIP: index_pip,
+        INDEX_TIP: (x, y, 0.0, confidence),
+        MIDDLE_TIP: curled_tip(MIDDLE_MCP, MIDDLE_PIP),
+        RING_TIP: curled_tip(13, RING_PIP),
+        PINKY_TIP: curled_tip(17, PINKY_PIP),
+    }
+    return HandObservation(
+        track_id=0,
+        landmarks=make_landmarks(overrides, confidence=confidence),
+        confidence=confidence,
+        handedness="Right",
+    )
+
+
+def frame(milliseconds: int, sequence: int) -> Frame:
+    return Frame(np.zeros((2, 2, 3), np.uint8), milliseconds * MS, sequence)
+
+
+def test_pointer_mode_moves_the_cursor_on_the_identified_monitor() -> None:
+    with session() as (runtime, adapter, clock, tracker):
+        activate(runtime, 100)
+        runtime.handle_event(
+            event(GestureAction.ENTER_POINTER_MODE, 200, Gesture.PINCH)
+        )
+        assert runtime.state is S.POINTER_MODE
+
+        tracker.observations = (pointer_observation(0.5, 0.3),)
+        runtime.process_frame(frame(300, 1))
+        runtime.tick(at(clock, 300))
+
+        wait_for(
+            lambda: adapter.executed == [PointerMove(960, 0)],
+            "one pointer move on the slideshow monitor",
+        )
+
+
+def test_single_click_waits_for_the_double_click_window() -> None:
+    with session() as (runtime, adapter, clock, _tracker):
+        activate(runtime, 100)
+        runtime.handle_event(
+            event(GestureAction.ENTER_POINTER_MODE, 200, Gesture.PINCH)
+        )
+        runtime.handle_event(
+            event(GestureAction.CLICK_CANDIDATE, 300, Gesture.PINCH_RELEASE)
+        )
+
+        runtime.tick(at(clock, 600))
+        assert adapter.executed == []
+
+        runtime.tick(at(clock, 651))
+        wait_for(lambda: adapter.executed == [Click()], "the pending single click")
+
+
+def test_a_second_candidate_dispatches_one_double_click() -> None:
+    with session() as (runtime, adapter, clock, _tracker):
+        activate(runtime, 100)
+        runtime.handle_event(
+            event(GestureAction.ENTER_POINTER_MODE, 200, Gesture.PINCH)
+        )
+        runtime.handle_event(
+            event(GestureAction.CLICK_CANDIDATE, 300, Gesture.PINCH_RELEASE)
+        )
+        runtime.handle_event(
+            event(GestureAction.CLICK_CANDIDATE, 400, Gesture.PINCH_RELEASE)
+        )
+
+        wait_for(lambda: adapter.executed == [DoubleClick()], "one double click")
+
+        runtime.tick(at(clock, 1_000))
+        assert adapter.executed == [DoubleClick()]
+
+
+def test_long_pinch_exits_pointer_mode_and_cancels_the_pending_click() -> None:
+    with session() as (runtime, adapter, clock, _tracker):
+        activate(runtime, 100)
+        runtime.handle_event(
+            event(GestureAction.ENTER_POINTER_MODE, 200, Gesture.PINCH)
+        )
+        runtime.handle_event(
+            event(GestureAction.CLICK_CANDIDATE, 300, Gesture.PINCH_RELEASE)
+        )
+
+        record = runtime.handle_event(
+            event(GestureAction.EXIT_POINTER_MODE, 400, Gesture.PINCH)
+        )
+
+        assert record is not None and record.accepted is True
+        assert runtime.state is S.ACTIVE
+        runtime.tick(at(clock, 1_000))
+        assert adapter.executed == []
+
+
+def test_scroll_mode_emits_notches_only_after_deliberate_movement() -> None:
+    with session() as (runtime, adapter, clock, tracker):
+        activate(runtime, 100)
+        runtime.handle_event(
+            event(GestureAction.ENTER_SCROLL_MODE, 200, Gesture.PEACE)
+        )
+        assert runtime.state is S.SCROLL_MODE
+
+        tracker.observations = (pointer_observation(0.45, 0.2),)
+        for index in range(13):
+            timestamp = 300 + index * 100
+            runtime.process_frame(frame(timestamp, index + 1))
+            runtime.tick(at(clock, timestamp))
+
+        wait_for(
+            lambda: any(
+                isinstance(payload, Scroll) and payload.notches > 0
+                for payload in adapter.executed
+            ),
+            "upward scroll notches",
+        )
+        assert all(
+            isinstance(payload, Scroll) for payload in adapter.executed
+        ), adapter.executed
+
+        record = runtime.handle_event(
+            event(GestureAction.EXIT_SCROLL_MODE, 1_600, Gesture.PEACE)
+        )
+        assert record is not None and record.accepted is True
+        assert runtime.state is S.ACTIVE
+
+
+def test_exit_from_active_reaches_terminated() -> None:
+    with session() as (runtime, _adapter, clock, _tracker):
+        activate(runtime, 100)
+
+        record = runtime.handle_event(
+            event(GestureAction.EXIT_REQUEST, 200, Gesture.SHAKA)
+        )
+        assert record is not None and record.accepted is True
+        assert runtime.state is S.EXITING
+
+        at(clock, 200)
+        runtime.shutdown()
+        assert runtime.machine.terminated is True
+
+
+def test_pause_cancels_a_pending_click_and_resume_returns_to_active() -> None:
+    with session() as (runtime, adapter, clock, _tracker):
+        activate(runtime, 100)
+        runtime.handle_event(
+            event(GestureAction.ENTER_POINTER_MODE, 200, Gesture.PINCH)
+        )
+        runtime.handle_event(
+            event(GestureAction.CLICK_CANDIDATE, 300, Gesture.PINCH_RELEASE)
+        )
+
+        runtime.handle_event(
+            event(GestureAction.PAUSE_TRACKING, 400, Gesture.FIST)
+        )
+        assert runtime.state is S.PAUSED
+
+        runtime.tick(at(clock, 1_000))
+        assert adapter.executed == []
+
+        record = runtime.handle_event(
+            event(GestureAction.RESUME_TRACKING, 1_100, Gesture.THUMBS_UP)
+        )
+        assert record is not None and record.accepted is True
+        assert runtime.state is S.ACTIVE
+
+
+def test_focus_loss_pauses_and_resume_is_still_deliberate() -> None:
+    with session() as (runtime, adapter, clock, _tracker):
+        activate(runtime, 100)
+        runtime.handle_event(
+            event(GestureAction.ENTER_POINTER_MODE, 200, Gesture.PINCH)
+        )
+        runtime.handle_event(
+            event(GestureAction.CLICK_CANDIDATE, 300, Gesture.PINCH_RELEASE)
+        )
+
+        adapter.kind = TargetKind.UNKNOWN
+        runtime.tick(at(clock, 400))
+        assert runtime.state is S.PAUSED
+
+        runtime.tick(at(clock, 1_000))
+        assert adapter.executed == []
+
+        adapter.kind = TargetKind.NORMAL_SLIDESHOW
+        runtime.tick(at(clock, 1_100))
+        assert runtime.state is S.PAUSED
+
+        record = runtime.handle_event(
+            event(GestureAction.RESUME_TRACKING, 1_200, Gesture.THUMBS_UP)
+        )
+        assert record is not None and record.accepted is True
+        assert runtime.state is S.ACTIVE
+
+
+def test_tracking_timeout_returns_to_idle() -> None:
+    with session() as (runtime, _adapter, clock, tracker):
+        activate(runtime, 100)
+
+        tracker.observations = ()
+        runtime.process_frame(frame(200, 1))
+        runtime.tick(at(clock, 1_300))
+
+        assert runtime.state is S.IDLE
+
+
+def test_an_adapter_failure_enters_error_and_exit_still_works() -> None:
+    with session() as (runtime, adapter, clock, _tracker):
+        activate(runtime, 100)
+        adapter.error = AdapterError.INPUT_BLOCKED
+        runtime.handle_event(
+            event(GestureAction.NEXT_SLIDE, 200, Gesture.OPEN_PALM_CLOCKWISE)
+        )
+
+        assert runtime.worker is not None
+        wait_for(
+            lambda: runtime.worker is not None and runtime.worker.stats().errors >= 1,
+            "the adapter error outcome",
+        )
+        runtime.tick(at(clock, 300))
+        assert runtime.state is S.ERROR
+
+        at(clock, 400)
+        record = runtime.handle_event(
+            event(GestureAction.EXIT_REQUEST, 400, Gesture.SHAKA)
+        )
+        assert record is not None and record.accepted is True
+        assert runtime.state is S.EXITING
+
+        runtime.shutdown()
+        assert runtime.machine.terminated is True
+
+
+def test_the_four_thread_runtime_starts_and_stops_cleanly() -> None:
+    source = SpinningSource()
+    tracker = FakeTracker()
+    adapter = FakeAdapter()
+    runtime = AirCueRuntime(
+        Config(), source=source, tracker=tracker, adapter=adapter
+    )
+    assert runtime.initialize().accepted is True
+    stop = threading.Event()
+    thread = threading.Thread(target=runtime.run, kwargs={"stop": stop}, daemon=True)
+    thread.start()
+    try:
+        wait_for(lambda: tracker.detects > 0, "the vision worker to process a frame")
+    finally:
+        stop.set()
+        thread.join(5.0)
+
+    assert not thread.is_alive()
+    assert source.closed is True
+    assert tracker.closed is True
+    assert runtime.state is S.IDLE

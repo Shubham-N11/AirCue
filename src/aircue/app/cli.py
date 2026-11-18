@@ -64,13 +64,14 @@ def _run(config_path: str | None) -> int:
     runtime = AirCueRuntime(config)
     try:
         record = runtime.initialize()
+        if not record.accepted or runtime.state is not InteractionState.IDLE:
+            print(f"aircue: startup failed: {record.reason}", file=sys.stderr)
+            return EXIT_STARTUP_FAILED
+        print(f"aircue: ready (state={runtime.state.value})")
+        runtime.run()
+        return EXIT_OK
     finally:
         runtime.close()
-    if not record.accepted or runtime.state is not InteractionState.IDLE:
-        print(f"aircue: startup failed: {record.reason}", file=sys.stderr)
-        return EXIT_STARTUP_FAILED
-    print(f"aircue: ready (state={runtime.state.value})")
-    return EXIT_OK
 
 
 def _benchmark(args: argparse.Namespace) -> int:

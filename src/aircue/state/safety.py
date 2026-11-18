@@ -41,13 +41,21 @@ class SafetyMonitor:
         self._timed_out = False
         self._focused = True
 
-    def tracking(self, present: bool, timestamp_ns: int) -> TrackingReport:
+    def tracking(
+        self,
+        present: bool,
+        timestamp_ns: int,
+        *,
+        first_absence_ns: int | None = None,
+    ) -> TrackingReport:
         if present:
             self._first_absence_ns = None
             self._timed_out = False
             return TrackingReport(TrackingStatus.TRACKED, 0, False)
         if self._first_absence_ns is None:
-            self._first_absence_ns = timestamp_ns
+            self._first_absence_ns = (
+                timestamp_ns if first_absence_ns is None else first_absence_ns
+            )
         absent_ns = timestamp_ns - self._first_absence_ns
 
         if absent_ns > self._idle_ns:

@@ -17,9 +17,13 @@ class FakeRuntime:
     def __init__(self, config) -> None:
         self.config = config
         self.closed = False
+        self.ran = False
 
     def initialize(self):
         return self.record
+
+    def run(self) -> None:
+        self.ran = True
 
     def close(self) -> None:
         self.closed = True
