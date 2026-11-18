@@ -70,7 +70,7 @@
 - [x] 6.5 Implement long-pinch priority across the recognizer and arbiter: 700 ms in POINTER_MODE exits to ACTIVE, cancels a pending click, and suppresses the release click; the entry pinch is consumed; a fully re-armed cycle is required before a click. Verify tests cover long-pinch-while-pending, release-after-long-pinch, entry-pinch consumption, and continuous-pinch suppression.
 - [x] 6.6 Implement click capability and focus gating in the command path: no click in PRESENTER_VIEW, EDIT_MODE, UNKNOWN, or without foreground focus; verify each rejection is recorded and sends no input.
 - [x] 6.7 Implement SCROLL_MODE mapping with vertical dead zone, direction, speed, maximum 10 notches/s, and stop on neutral, exit, hand loss, or focus loss; verify entering or leaving the mode emits no scroll by itself and scroll occurs only in SCROLL_MODE with scroll capability.
-- [ ] 6.8 Run pointer and scroll integration tests with a fake adapter; verify no cursor, click, double-click, or scroll output is produced outside its permitted mode and target capability.
+- [x] 6.8 Run pointer and scroll integration tests with a fake adapter; verify no cursor, click, double-click, or scroll output is produced outside its permitted mode and target capability.
 
 ## 7. Runtime Integration
 
