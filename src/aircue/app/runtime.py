@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Generic, TypeVar
 
+from aircue.app.hotkeys import HotkeyAction, HotkeyPoller
 from aircue.capture.mailbox import CaptureThread, FrameMailbox
 from aircue.capture.opencv_source import OpenCvCameraSource
 from aircue.capture.source import FrameSource
@@ -40,7 +41,7 @@ from aircue.presentation.adapter import (
     SlideDirection,
 )
 from aircue.presentation.target import TargetKind, TargetSnapshot
-from aircue.presentation.win32 import CtypesWin32
+from aircue.presentation.win32 import CtypesKeyState, CtypesWin32
 from aircue.presentation.win32_adapter import Win32Adapter
 from aircue.presentation.win32_input import CtypesInput
 from aircue.state.activation import ActivationController, ActivationSource
@@ -131,6 +132,7 @@ class AirCueRuntime:
         adapter: PresentationAdapter | None = None,
         indicator: StatusIndicator | None = None,
         clock_ns: Callable[[], int] = time.monotonic_ns,
+        key_down: Callable[[int], bool] | None = None,
     ) -> None:
         self.config = config
         self.clock_ns = clock_ns
@@ -138,6 +140,9 @@ class AirCueRuntime:
         self.feedback = StatusFeedback(indicator or _SilentIndicator())
         self.manager = CommandManager()
         self.activation = ActivationController()
+        self.hotkeys = HotkeyPoller(
+            config.hotkeys, key_down or CtypesKeyState().pressed
+        )
         self.recognizer = GestureRecognizer(config)
         self.clicks = ClickController(
             self.machine, double_click_window_ms=config.timing.double_click_window_ms
@@ -422,6 +427,7 @@ class AirCueRuntime:
         """One state-thread iteration: faults, outcomes, events, samples, timers."""
         now = self.clock_ns() if now_ns is None else now_ns
         self._apply_pending_faults(now)
+        self._poll_hotkeys(now)
         self._drain_outcomes(now)
         self._drain_events()
         sample = self.hands.take()
@@ -456,7 +462,32 @@ class AirCueRuntime:
             logger.info("activation rejected: %s", decision.reason)
             return None
         assert decision.trigger is not None
+        logger.info("activation accepted via %s", source.value)
         return self._transition(decision.trigger, timestamp_ns, reason=decision.reason or None)
+
+    def _poll_hotkeys(self, now_ns: int) -> None:
+        for action in self.hotkeys.poll():
+            record: TransitionRecord | None
+            if action is HotkeyAction.EXIT:
+                record = self._transition(
+                    TransitionTrigger.EXIT_REQUEST,
+                    now_ns,
+                    reason=f"hotkey: {self.hotkeys.spec(action)}",
+                )
+            elif action is HotkeyAction.DEACTIVATE:
+                record = self._transition(
+                    TransitionTrigger.DEACTIVATION_HOTKEY,
+                    now_ns,
+                    reason=f"hotkey: {self.hotkeys.spec(action)}",
+                )
+            else:
+                record = self._activation(ActivationSource.HOTKEY, now_ns)
+            effect = (
+                f"-> {record.resulting.value}"
+                if record is not None and record.accepted
+                else "no effect"
+            )
+            logger.info("hotkey %s: %s", self.hotkeys.spec(action), effect)
 
     def _mode_change(
         self,

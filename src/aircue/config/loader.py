@@ -9,6 +9,7 @@ from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Any, get_type_hints
 
+from aircue.app.hotkeys import parse_hotkey
 from aircue.config.schema import Config
 
 
@@ -120,5 +121,7 @@ def _validate_cross_fields(config: Config, source: str) -> None:
         if tier.min_fps > tier.max_fps:
             raise ConfigError(f"{source}: hardware.{tier_name}.min_fps must be <= max_fps")
     for name in ("activate", "deactivate", "exit"):
-        if not getattr(config.hotkeys, name).strip():
-            raise ConfigError(f"{source}: hotkeys.{name} must not be empty")
+        try:
+            parse_hotkey(getattr(config.hotkeys, name))
+        except ValueError as exc:
+            raise ConfigError(f"{source}: hotkeys.{name}: {exc}") from exc

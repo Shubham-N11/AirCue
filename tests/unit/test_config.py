@@ -135,6 +135,12 @@ def test_pinch_threshold_ordering_is_enforced() -> None:
         )
 
 
+@pytest.mark.parametrize("spec", ["", "ctrl+alt", "hyper+a", "ctrl+a+b"])
+def test_invalid_hotkey_is_rejected(spec: str) -> None:
+    with pytest.raises(ConfigError, match="hotkeys.activate"):
+        parse_config({"hotkeys": {"activate": spec}})
+
+
 def test_load_explicit_file(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({"timing": {"resume_hold_ms": 300}}), encoding="utf-8")

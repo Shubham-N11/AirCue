@@ -70,6 +70,8 @@ _user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
 _user32.MonitorFromWindow.restype = wintypes.HMONITOR
 _user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.POINTER(_MONITORINFO)]
 _user32.GetMonitorInfoW.restype = wintypes.BOOL
+_user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+_user32.GetAsyncKeyState.restype = wintypes.SHORT
 
 
 class CtypesWin32:
@@ -141,3 +143,10 @@ class CtypesWin32:
             raise ctypes.WinError(ctypes.get_last_error())
         rect = info.rcMonitor
         return ScreenRect(rect.left, rect.top, rect.right, rect.bottom)
+
+
+class CtypesKeyState:
+    """Global key state from ``GetAsyncKeyState``, independent of focus."""
+
+    def pressed(self, virtual_key: int) -> bool:
+        return bool(_user32.GetAsyncKeyState(virtual_key) & 0x8000)

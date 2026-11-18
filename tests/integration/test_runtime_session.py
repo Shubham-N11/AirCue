@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import threading
 import time
@@ -9,7 +10,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 import numpy as np
+import pytest
 
+from aircue.app.hotkeys import VK_CONTROL, VK_MENU
 from aircue.app.runtime import AirCueRuntime
 from aircue.capture.types import CaptureOpenResult, Frame
 from aircue.config.schema import Config
@@ -138,16 +141,19 @@ class FakeAdapter:
 def session(
     kind: TargetKind = TargetKind.NORMAL_SLIDESHOW,
     observations: tuple[HandObservation, ...] = (),
+    keys: set[int] | None = None,
 ) -> Iterator[tuple[AirCueRuntime, FakeAdapter, Clock, FakeTracker]]:
     clock = Clock()
     adapter = FakeAdapter(kind)
     tracker = FakeTracker(observations)
+    down = keys if keys is not None else set()
     runtime = AirCueRuntime(
         Config(),
         source=FakeSource(),
         tracker=tracker,
         adapter=adapter,
         clock_ns=clock,
+        key_down=down.__contains__,
     )
     assert runtime.initialize().accepted is True
     assert runtime.worker is not None
@@ -197,6 +203,78 @@ def test_initializing_reaches_idle_and_a_confirmed_thumbs_up_activates() -> None
         assert record is not None and record.accepted is True
         assert runtime.state is S.ACTIVE
         assert runtime.feedback.status.state is S.ACTIVE
+
+
+def test_activation_hotkey_works_while_a_slideshow_is_foreground() -> None:
+    keys = {VK_CONTROL, VK_MENU}
+    with session(keys=keys) as (runtime, _adapter, clock, _tracker):
+        keys.add(ord("A"))
+        runtime.tick(at(clock, 100))
+
+        assert runtime.state is S.ACTIVE
+        generation = runtime.machine.generation
+
+        runtime.tick(at(clock, 200))
+        assert runtime.state is S.ACTIVE
+        assert runtime.machine.generation == generation
+
+
+def test_deactivation_hotkey_leaves_pointer_mode_for_idle() -> None:
+    keys = {VK_CONTROL, VK_MENU}
+    with session(keys=keys) as (runtime, adapter, clock, _tracker):
+        activate(runtime, 100)
+        runtime.handle_event(
+            event(GestureAction.ENTER_POINTER_MODE, 200, Gesture.PINCH)
+        )
+        assert runtime.state is S.POINTER_MODE
+
+        keys.add(ord("D"))
+        runtime.tick(at(clock, 300))
+
+        assert runtime.state is S.IDLE
+        assert adapter.executed == []
+
+
+def test_exit_hotkey_works_from_paused_and_records_its_effect(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    keys = {VK_CONTROL, VK_MENU}
+    with session(keys=keys) as (runtime, _adapter, clock, _tracker):
+        activate(runtime, 100)
+        runtime.handle_event(event(GestureAction.PAUSE_TRACKING, 200, Gesture.FIST))
+        assert runtime.state is S.PAUSED
+
+        keys.add(ord("Q"))
+        with caplog.at_level(logging.INFO, logger="aircue.runtime"):
+            runtime.tick(at(clock, 300))
+
+        assert runtime.state is S.EXITING
+        assert any(
+            "ctrl+alt+q" in message and "exiting" in message
+            for message in caplog.messages
+        )
+
+        runtime.shutdown()
+        assert runtime.machine.terminated is True
+
+
+def test_activation_hotkey_outside_idle_has_no_effect_and_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    keys = {VK_CONTROL, VK_MENU, ord("A")}
+    with session(keys=keys) as (runtime, _adapter, clock, _tracker):
+        activate(runtime, 100)
+        generation = runtime.machine.generation
+
+        with caplog.at_level(logging.INFO, logger="aircue.runtime"):
+            runtime.tick(at(clock, 200))
+
+        assert runtime.state is S.ACTIVE
+        assert runtime.machine.generation == generation
+        assert any(
+            "ctrl+alt+a" in message and "no effect" in message
+            for message in caplog.messages
+        )
 
 
 def test_activation_without_a_slideshow_target_is_rejected() -> None:
