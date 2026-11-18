@@ -14,8 +14,9 @@ class FakeRuntime:
     state = InteractionState.IDLE
     record = SimpleNamespace(accepted=True, reason="ready")
 
-    def __init__(self, config) -> None:
+    def __init__(self, config, indicator=None) -> None:
         self.config = config
+        self.indicator = indicator
         self.closed = False
         self.ran = False
 

@@ -14,6 +14,7 @@ from aircue.presentation.win32 import CtypesWin32
 from aircue.state.machine import StateMachine
 from aircue.state.states import InteractionState
 from aircue.state.transitions import TransitionTrigger
+from aircue.ui.overlay import Win32StatusOverlay
 
 EXIT_OK = 0
 EXIT_STARTUP_FAILED = 1
@@ -61,7 +62,12 @@ def _run(config_path: str | None) -> int:
     except ConfigError as exc:
         return _config_failure(exc)
 
-    runtime = AirCueRuntime(config)
+    overlay = (
+        Win32StatusOverlay(opacity=config.ui.overlay_opacity)
+        if config.ui.overlay_enabled
+        else None
+    )
+    runtime = AirCueRuntime(config, indicator=overlay)
     try:
         record = runtime.initialize()
         if not record.accepted or runtime.state is not InteractionState.IDLE:
@@ -72,6 +78,8 @@ def _run(config_path: str | None) -> int:
         return EXIT_OK
     finally:
         runtime.close()
+        if overlay is not None:
+            overlay.close()
 
 
 def _benchmark(args: argparse.Namespace) -> int:
