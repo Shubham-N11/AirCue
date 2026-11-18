@@ -5,8 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from aircue.commands.commands import Command, CommandRejection
+from aircue.commands.manager import CommandManager
 from aircue.gestures.semantic import GestureAction, SemanticEvent
 from aircue.gestures.vocabulary import Gesture
+from aircue.presentation.adapter import Click, DoubleClick
+from aircue.presentation.target import TargetCapabilities
 from aircue.state.machine import StateMachine, TransitionRecord
 from aircue.state.states import InteractionState
 from aircue.state.transitions import TransitionTrigger
@@ -104,3 +108,58 @@ class ClickController:
 
     def cancel(self) -> None:
         self._arbiter.cancel()
+
+
+class ClickRejection(StrEnum):
+    STATE = "state"
+    CAPABILITY = "capability"
+    FOCUS = "focus"
+
+
+@dataclass(frozen=True)
+class ClickDecision:
+    """The command-path record for one arbitrated click; a rejection sends nothing."""
+
+    command: Command
+    state: InteractionState
+    payload: Click | DoubleClick | None = None
+    rejection: ClickRejection | None = None
+    reason: str = ""
+
+    @property
+    def allowed(self) -> bool:
+        return self.rejection is None
+
+
+def gate_click(
+    manager: CommandManager,
+    dispatch: ClickDispatch,
+    state: InteractionState,
+    capabilities: TargetCapabilities,
+    *,
+    foreground: bool,
+) -> ClickDecision:
+    """Convert an arbitrated click into a payload, or record why it may not be sent."""
+    if dispatch is ClickDispatch.SINGLE:
+        command = Command.CLICK
+        payload: Click | DoubleClick = Click()
+    else:
+        command = Command.DOUBLE_CLICK
+        payload = DoubleClick()
+    decision = manager.validate(command, state, capabilities)
+    if decision.rejection is CommandRejection.STATE:
+        return ClickDecision(
+            command, state, rejection=ClickRejection.STATE, reason=decision.reason
+        )
+    if decision.rejection is CommandRejection.CAPABILITY:
+        return ClickDecision(
+            command, state, rejection=ClickRejection.CAPABILITY, reason=decision.reason
+        )
+    if not foreground:
+        return ClickDecision(
+            command,
+            state,
+            rejection=ClickRejection.FOCUS,
+            reason=f"{command.value} requires a foreground presentation target",
+        )
+    return ClickDecision(command, state, payload=payload)
