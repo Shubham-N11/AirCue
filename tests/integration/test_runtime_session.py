@@ -672,3 +672,141 @@ def test_a_traced_command_shares_a_session_and_ordered_timestamps(tmp_path) -> N
     )
     assert traced[2]["sequence"] == traced[3]["sequence"]
     assert traced[3]["status"] == "delivered"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        S.INITIALIZING,
+        S.IDLE,
+        S.ACTIVE,
+        S.PAUSED,
+        S.POINTER_MODE,
+        S.SCROLL_MODE,
+        S.ERROR,
+    ],
+)
+def test_shutdown_terminates_from_every_non_terminated_state(
+    target: InteractionState,
+) -> None:
+    clock = Clock()
+    source = FakeSource()
+    tracker = FakeTracker()
+    adapter = FakeAdapter()
+    runtime = AirCueRuntime(
+        Config(),
+        source=source,
+        tracker=tracker,
+        adapter=adapter,
+        clock_ns=clock,
+        key_down=lambda _key: False,
+    )
+    if target is not S.INITIALIZING:
+        assert runtime.initialize().accepted is True
+        at(clock, 100)
+        if target is not S.IDLE:
+            activate(runtime, 100)
+        if target is S.PAUSED:
+            runtime.handle_event(
+                event(GestureAction.PAUSE_TRACKING, 200, Gesture.FIST)
+            )
+        elif target is S.POINTER_MODE:
+            runtime.handle_event(
+                event(GestureAction.ENTER_POINTER_MODE, 200, Gesture.PINCH)
+            )
+        elif target is S.SCROLL_MODE:
+            runtime.handle_event(
+                event(GestureAction.ENTER_SCROLL_MODE, 200, Gesture.PEACE)
+            )
+        elif target is S.ERROR:
+            assert runtime.worker is not None
+            runtime.worker.start()
+            adapter.error = AdapterError.INTERNAL
+            runtime.handle_event(
+                event(GestureAction.NEXT_SLIDE, 200, Gesture.OPEN_PALM_CLOCKWISE)
+            )
+            wait_for(
+                lambda: runtime.worker is not None
+                and runtime.worker.stats().errors == 1,
+                "the adapter error",
+            )
+            runtime.tick(at(clock, 300))
+        assert runtime.state is target
+
+    at(clock, 400)
+    record = runtime.request_exit()
+    assert record.accepted is True
+    assert runtime.state is S.EXITING
+
+    at(clock, 500)
+    runtime.shutdown()
+
+    assert runtime.machine.terminated is True
+    assert runtime.worker is None
+    assert runtime.source is None
+    assert runtime.tracker is None
+    if target is not S.INITIALIZING:
+        assert source.closed is True
+        assert tracker.closed is True
+
+
+class BlockingAdapter(FakeAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.gate = threading.Event()
+
+    def execute(self, payload: CommandPayload) -> AdapterResult:
+        self.executed.append(payload)
+        self.started.set()
+        self.gate.wait(5.0)
+        return AdapterResult(self.error)
+
+
+def test_a_wedged_command_worker_is_abandoned_and_shutdown_completes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    clock = Clock()
+    source = FakeSource()
+    tracker = FakeTracker()
+    adapter = BlockingAdapter()
+    runtime = AirCueRuntime(
+        Config(),
+        source=source,
+        tracker=tracker,
+        adapter=adapter,
+        clock_ns=clock,
+        key_down=lambda _key: False,
+    )
+    assert runtime.initialize().accepted is True
+    worker = runtime.worker
+    assert worker is not None
+    worker.start()
+    try:
+        activate(runtime, 100)
+        runtime.handle_event(
+            event(GestureAction.NEXT_SLIDE, 200, Gesture.OPEN_PALM_CLOCKWISE)
+        )
+        assert adapter.started.wait(2.0)
+
+        at(clock, 300)
+        assert runtime.request_exit().accepted is True
+        at(clock, 400)
+        with caplog.at_level(logging.ERROR, logger="aircue.session"):
+            started_at = time.monotonic()
+            runtime.shutdown()
+            elapsed = time.monotonic() - started_at
+
+        assert elapsed < 2.0
+        assert runtime.machine.terminated is True
+        assert source.closed is True
+        assert tracker.closed is True
+        assert worker._thread is not None and worker._thread.daemon is True
+        assert any(
+            getattr(record, "fields", {}).get("reason")
+            == "command worker did not stop"
+            for record in caplog.records
+        )
+    finally:
+        adapter.gate.set()
+        runtime.close()

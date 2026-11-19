@@ -307,9 +307,20 @@ class AirCueRuntime:
     def close(self) -> None:
         """Release the resources acquired by initialize and run."""
         self._stop_event.set()
-        if self._capture is not None:
-            self._capture.stop()
-            self._capture = None
+        if self.worker is not None:
+            self.worker.stop()
+            self.worker = None
+
+        capture = self._capture
+        self._capture = None
+        if capture is not None and not capture.stop():
+            record_event(
+                "fault",
+                generation=self.machine.generation,
+                level=logging.ERROR,
+                reason="capture thread did not stop",
+                timeout_s=_JOIN_TIMEOUT_S,
+            )
         self.frames.close()
 
         vision = self._vision_thread
@@ -319,14 +330,14 @@ class AirCueRuntime:
             vision.join(_JOIN_TIMEOUT_S)
             vision_alive = vision.is_alive()
             if vision_alive:
-                logger.error(
-                    "vision worker did not stop within %.1f s; abandoning it",
-                    _JOIN_TIMEOUT_S,
+                record_event(
+                    "fault",
+                    generation=self.machine.generation,
+                    level=logging.ERROR,
+                    reason="vision worker did not stop",
+                    timeout_s=_JOIN_TIMEOUT_S,
                 )
 
-        if self.worker is not None:
-            self.worker.stop()
-            self.worker = None
         if self.tracker is not None:
             if not vision_alive:
                 self.tracker.close()
