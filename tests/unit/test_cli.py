@@ -113,10 +113,49 @@ def test_benchmark_rejects_a_fixture_in_live_mode(capsys) -> None:
     assert "does not take --fixture" in capsys.readouterr().err
 
 
-def test_benchmark_that_is_not_implemented_exits_unavailable(config_file, capsys) -> None:
-    args = ["benchmark", "--mode", "replay", "--fixture", "f.jsonl", "--config", config_file]
+def test_live_benchmark_is_not_available(config_file, capsys) -> None:
+    args = ["benchmark", "--mode", "live", "--config", config_file]
     assert main(args) == EXIT_UNAVAILABLE
     assert "not available in this build" in capsys.readouterr().err
+
+
+def test_a_missing_replay_fixture_is_a_usage_error(config_file, tmp_path, capsys) -> None:
+    missing = tmp_path / "missing.npz"
+    args = [
+        "benchmark",
+        "--mode",
+        "replay",
+        "--fixture",
+        str(missing),
+        "--config",
+        config_file,
+    ]
+    assert main(args) == EXIT_USAGE
+    assert "cannot read replay fixture" in capsys.readouterr().err
+
+
+def test_a_replay_without_a_model_fails_before_processing(
+    config_file, tmp_path, capsys
+) -> None:
+    import numpy as np
+
+    path = tmp_path / "fixture.npz"
+    np.savez(
+        path,
+        images=np.zeros((1, 2, 2, 3), dtype=np.uint8),
+        timestamps_ns=np.asarray([0], dtype=np.int64),
+    )
+    args = [
+        "benchmark",
+        "--mode",
+        "replay",
+        "--fixture",
+        str(path),
+        "--config",
+        config_file,
+    ]
+    assert main(args) == EXIT_STARTUP_FAILED
+    assert "model path is not configured" in capsys.readouterr().err
 
 
 def test_benchmark_requires_a_mode(capsys) -> None:

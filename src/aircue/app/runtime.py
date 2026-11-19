@@ -74,6 +74,9 @@ logger = logging.getLogger("aircue.runtime")
 _TICK_INTERVAL_S = 0.01
 _EVENT_QUEUE_SIZE = 16
 _JOIN_TIMEOUT_S = 1.0
+_COMPLETION_STAGES = frozenset(
+    {Stage.COMMAND_VALIDATION, Stage.DISPATCH_QUEUE_WAIT, Stage.ADAPTER_EXECUTION}
+)
 
 
 def _action_name(payload: CommandPayload) -> str:
@@ -396,12 +399,14 @@ class AirCueRuntime:
                     )
         except InvalidLandmarkFrameError:
             self._invalid_frames += 1
+            self._record_timings(frame.timings, timestamp_ns)
             self.hands.publish(
                 HandSample(None, timestamp_ns, False, timings=frame.timings)
             )
             self.recognizer.update(None, self.state, timestamp_ns, sequence=frame.sequence)
             return None
         except Exception as exc:
+            self._record_timings(frame.timings, timestamp_ns)
             self._record_vision_error(str(exc))
             return None
 
@@ -422,14 +427,15 @@ class AirCueRuntime:
                 timestamp_ns,
                 sequence=frame.sequence,
             )
+        if event is not None and frame.timings is not None:
+            frame.timings.record(
+                Stage.TEMPORAL_CONFIRMATION,
+                event.onset_ns,
+                event.timestamp_ns,
+                clock="frame",
+            )
+        self._record_timings(frame.timings, timestamp_ns)
         if event is not None:
-            if frame.timings is not None:
-                frame.timings.record(
-                    Stage.TEMPORAL_CONFIRMATION,
-                    event.onset_ns,
-                    event.timestamp_ns,
-                    clock="frame",
-                )
             record_event(
                 "gesture",
                 generation=self.machine.generation,
@@ -647,6 +653,23 @@ class AirCueRuntime:
             self._after_transition(update.transition)
         return update.transition
 
+    def _record_timings(
+        self, timings: FrameTimings | None, timestamp_ns: int
+    ) -> None:
+        if self.instrument and timings is not None:
+            self.metrics.record_timings(timings, timestamp_ns=timestamp_ns)
+
+    def _record_completion_stages(
+        self, timings: FrameTimings | None, timestamp_ns: int
+    ) -> None:
+        if timings is None:
+            return
+        for span in timings.spans:
+            if span.stage in _COMPLETION_STAGES:
+                self.metrics.record(
+                    span.stage.value, span.duration_ns, timestamp_ns=timestamp_ns
+                )
+
     def _record_state_metrics(
         self,
         event: SemanticEvent,
@@ -669,6 +692,7 @@ class AirCueRuntime:
                 max(0, record.timestamp_ns - timings.capture_ts_ns),
                 timestamp_ns=record.timestamp_ns,
             )
+        self._record_completion_stages(timings, record.timestamp_ns)
 
     def _observe_hand(self, sample: HandSample, now_ns: int) -> None:
         report = self.safety.tracking(
@@ -801,6 +825,7 @@ class AirCueRuntime:
     def _record_dispatch_metrics(self, outcome: DispatchOutcome) -> None:
         action = outcome.action or _action_name(outcome.payload)
         completed_ns = outcome.completed_ns
+        self._record_completion_stages(outcome.timings, completed_ns)
         self.metrics.record(
             f"{action}.dispatch",
             max(0, completed_ns - outcome.enqueued_ns),

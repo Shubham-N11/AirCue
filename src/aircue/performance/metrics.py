@@ -180,6 +180,7 @@ class MetricResult:
     samples: int
     target: MetricTarget | None = None
     passed: bool | None = None
+    live_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -190,6 +191,8 @@ class PerformanceReport:
     metrics: tuple[MetricResult, ...]
     slowest_stage: str | None = None
     frame_rate_fps: float | None = None
+    fixture_hash: str | None = None
+    simulated_clock: bool | None = None
 
     @property
     def passed(self) -> bool | None:
@@ -209,6 +212,8 @@ class PerformanceReport:
             "target_basis": self.target_basis,
             "frame_rate_fps": self.frame_rate_fps,
             "slowest_stage": self.slowest_stage,
+            "fixture_hash": self.fixture_hash,
+            "simulated_clock": self.simulated_clock,
             "sample_count": self.sample_count,
             "passed": self.passed,
             "metrics": {
@@ -225,6 +230,7 @@ class PerformanceReport:
                     "target_p95_ms": (
                         None if metric.target is None else metric.target.p95_ms
                     ),
+                    "live_only": metric.live_only,
                     "passed": metric.passed,
                 }
                 for metric in self.metrics
@@ -236,6 +242,13 @@ class PerformanceReport:
 
 
 _STAGE_NAMES = {stage.value for stage in Stage}
+_LIVE_ONLY_SUFFIXES = (".gesture_response", ".capture_to_action")
+_LIVE_ONLY_NAMES = {"gesture_response", "capture_to_action"}
+
+
+def is_live_only_metric(name: str) -> bool:
+    """True for metrics replay must not use as live-camera evidence."""
+    return name in _LIVE_ONLY_NAMES or name.endswith(_LIVE_ONLY_SUFFIXES)
 
 
 def build_report(
@@ -245,6 +258,8 @@ def build_report(
     benchmark_mode: BenchmarkMode,
     adapter_mode: AdapterMode,
     metric_targets: Mapping[str, MetricTarget] | None = None,
+    fixture_hash: str | None = None,
+    simulated_clock: bool | None = None,
     now_ns: int | None = None,
 ) -> PerformanceReport:
     """Percentile snapshot over the rolling window, with pass/fail per target."""
@@ -255,6 +270,7 @@ def build_report(
         if not values:
             continue
         target = declared.get(name)
+        live_only = is_live_only_metric(name)
         results.append(
             MetricResult(
                 name=name,
@@ -262,7 +278,12 @@ def build_report(
                 p95_ns=percentile_ns(values, 95),
                 samples=len(values),
                 target=target,
-                passed=_passed(values, target),
+                passed=(
+                    None
+                    if benchmark_mode is BenchmarkMode.REPLAY and live_only
+                    else _passed(values, target)
+                ),
+                live_only=live_only,
             )
         )
 
@@ -275,6 +296,8 @@ def build_report(
         metrics=tuple(results),
         slowest_stage=slowest,
         frame_rate_fps=recorder.frame_rate_fps(now_ns=now_ns),
+        fixture_hash=fixture_hash,
+        simulated_clock=simulated_clock,
     )
 
 

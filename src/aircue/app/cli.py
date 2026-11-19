@@ -9,6 +9,12 @@ import time
 from aircue.app.runtime import AirCueRuntime
 from aircue.config.loader import ConfigError, load_config
 from aircue.diagnostics.session_log import close_session_logging, configure_session_logging
+from aircue.performance.replay import (
+    FrameFixture,
+    ReplayError,
+    ReplayFixtureError,
+    run_replay,
+)
 from aircue.presentation.classify import classify_target
 from aircue.presentation.discovery import DiscoveryResult, PowerPointDiscovery
 from aircue.presentation.win32 import CtypesWin32
@@ -16,6 +22,8 @@ from aircue.state.machine import StateMachine
 from aircue.state.states import InteractionState
 from aircue.state.transitions import TransitionTrigger
 from aircue.ui.overlay import Win32StatusOverlay
+from aircue.vision.tracker import MediaPipeHandTracker
+from aircue.vision.types import TrackerError
 
 EXIT_OK = 0
 EXIT_STARTUP_FAILED = 1
@@ -93,14 +101,36 @@ def _benchmark(args: argparse.Namespace) -> int:
         print("aircue: benchmark --mode live does not take --fixture", file=sys.stderr)
         return EXIT_USAGE
     try:
-        load_config(args.config)
+        config = load_config(args.config)
     except ConfigError as exc:
         return _config_failure(exc)
-    print(
-        f"aircue: benchmark mode {args.mode!r} is not available in this build",
-        file=sys.stderr,
-    )
-    return EXIT_UNAVAILABLE
+    if args.mode == "live":
+        print(
+            "aircue: benchmark mode 'live' is not available in this build",
+            file=sys.stderr,
+        )
+        return EXIT_UNAVAILABLE
+    try:
+        fixture = FrameFixture.load(args.fixture)
+    except ReplayFixtureError as exc:
+        print(f"aircue: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        tracker = MediaPipeHandTracker(
+            config.vision.model_path,
+            confidence_threshold=config.vision.confidence_threshold,
+            max_hands=config.vision.max_hands,
+        )
+    except TrackerError as exc:
+        print(f"aircue: benchmark tracker unavailable: {exc}", file=sys.stderr)
+        return EXIT_STARTUP_FAILED
+    try:
+        report = run_replay(fixture, config, tracker=tracker)
+    except ReplayError as exc:
+        print(f"aircue: {exc}", file=sys.stderr)
+        return EXIT_STARTUP_FAILED
+    print(report.to_json())
+    return EXIT_OK
 
 
 def _diagnose(discovery: DiscoveryResult | None = None) -> int:

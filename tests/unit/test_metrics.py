@@ -146,6 +146,52 @@ def test_the_json_report_carries_metadata_and_intentional_delay_only() -> None:
     assert "image" not in report.to_json()
 
 
+def test_a_replay_report_never_passes_live_only_metrics() -> None:
+    recorder = MetricsRecorder(window_s=10.0, clock_ns=lambda: 0)
+    recorder.record("click.gesture_response", 50 * MS, timestamp_ns=0)
+    recorder.record("click.capture_to_action", 60 * MS, timestamp_ns=0)
+    recorder.record("pointer", 40 * MS, timestamp_ns=0)
+    targets = PerformanceTargets("tier2", 100.0, 150.0, 50.0)
+    extras = {"click.gesture_response": MetricTarget(100.0, 150.0)}
+
+    replay = build_report(
+        recorder,
+        targets,
+        benchmark_mode=BenchmarkMode.REPLAY,
+        adapter_mode=AdapterMode.NOOP,
+        metric_targets=extras,
+        fixture_hash="fixture-sha",
+        simulated_clock=True,
+        now_ns=0,
+    )
+
+    by_name = {metric.name: metric for metric in replay.metrics}
+    assert by_name["click.gesture_response"].live_only is True
+    assert by_name["click.gesture_response"].passed is None
+    assert by_name["click.capture_to_action"].live_only is True
+    assert by_name["click.capture_to_action"].passed is None
+    assert by_name["pointer"].live_only is False
+    assert by_name["pointer"].passed is True
+    assert replay.passed is True
+
+    payload = json.loads(replay.to_json())
+    assert payload["fixture_hash"] == "fixture-sha"
+    assert payload["simulated_clock"] is True
+    assert payload["metrics"]["click.gesture_response"]["live_only"] is True
+    assert payload["metrics"]["click.gesture_response"]["passed"] is None
+
+    live = build_report(
+        recorder,
+        targets,
+        benchmark_mode=BenchmarkMode.LIVE_CAMERA,
+        adapter_mode=AdapterMode.NOOP,
+        metric_targets=extras,
+        now_ns=0,
+    )
+    live_by_name = {metric.name: metric for metric in live.metrics}
+    assert live_by_name["click.gesture_response"].passed is True
+
+
 def test_an_empty_report_is_not_marked_as_passed() -> None:
     report = build_report(
         MetricsRecorder(clock_ns=lambda: 0),
