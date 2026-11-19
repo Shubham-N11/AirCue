@@ -28,14 +28,17 @@ from aircue.commands.scroll import ScrollController
 from aircue.config.schema import Config
 from aircue.diagnostics.session_log import record_event
 from aircue.dispatch.errors import apply_error
-from aircue.dispatch.worker import CommandWorker
+from aircue.dispatch.worker import CommandWorker, DispatchOutcome, DispatchStatus
 from aircue.gestures.classifiers import is_pointer_pose
 from aircue.gestures.recognizer import GestureRecognizer
 from aircue.gestures.semantic import GestureAction, SemanticEvent
 from aircue.gestures.vocabulary import Gesture
+from aircue.performance.metrics import MetricsRecorder
 from aircue.performance.timing import FrameTimings, Stage, measure
 from aircue.presentation.adapter import (
+    Click,
     CommandPayload,
+    DoubleClick,
     Navigate,
     PointerMove,
     PresentationAdapter,
@@ -71,6 +74,20 @@ logger = logging.getLogger("aircue.runtime")
 _TICK_INTERVAL_S = 0.01
 _EVENT_QUEUE_SIZE = 16
 _JOIN_TIMEOUT_S = 1.0
+
+
+def _action_name(payload: CommandPayload) -> str:
+    if isinstance(payload, Navigate):
+        return "next_slide" if payload.direction is SlideDirection.NEXT else "previous_slide"
+    if isinstance(payload, PointerMove):
+        return "pointer"
+    if isinstance(payload, Scroll):
+        return "scroll"
+    if isinstance(payload, DoubleClick):
+        return "double_click"
+    if isinstance(payload, Click):
+        return "click"
+    return type(payload).__name__
 
 
 class StartupComponent(StrEnum):
@@ -141,6 +158,7 @@ class AirCueRuntime:
         self.config = config
         self.clock_ns = clock_ns
         self.instrument = instrument
+        self.metrics = MetricsRecorder(clock_ns=clock_ns)
         self.machine = StateMachine()
         self.feedback = StatusFeedback(indicator or _SilentIndicator())
         self.manager = CommandManager()
@@ -360,6 +378,10 @@ class AirCueRuntime:
         if self.tracker is None:
             return None
         timestamp_ns = frame.capture_ts_ns
+        if frame.timings is not None:
+            frame.timings.capture_ts_ns = timestamp_ns
+        if self.instrument:
+            self.metrics.record_frame(timestamp_ns=timestamp_ns)
         try:
             observations = self.tracker.detect(frame)
             selection = self.selection.update(observations, timestamp_ns)
@@ -435,6 +457,14 @@ class AirCueRuntime:
     def _handle_event(
         self, event: SemanticEvent, timings: FrameTimings | None
     ) -> TransitionRecord | None:
+        record = self._apply_event(event, timings)
+        if record is not None and record.accepted:
+            self._record_state_metrics(event, timings, record)
+        return record
+
+    def _apply_event(
+        self, event: SemanticEvent, timings: FrameTimings | None
+    ) -> TransitionRecord | None:
         action = event.action
         timestamp_ns = event.timestamp_ns
         record_event(
@@ -476,7 +506,7 @@ class AirCueRuntime:
                 timestamp_ns,
             )
         if action in (GestureAction.NEXT_SLIDE, GestureAction.PREV_SLIDE):
-            self._navigate(action, timestamp_ns, timings)
+            self._navigate(action, timestamp_ns, timings, event.onset_ns)
             return None
         if action is GestureAction.CLICK_CANDIDATE or (
             action is GestureAction.EXIT_POINTER_MODE
@@ -577,6 +607,7 @@ class AirCueRuntime:
         action: GestureAction,
         timestamp_ns: int,
         timings: FrameTimings | None,
+        onset_ns: int,
     ) -> None:
         if action is GestureAction.NEXT_SLIDE:
             command, direction = Command.NEXT_SLIDE, SlideDirection.NEXT
@@ -587,13 +618,14 @@ class AirCueRuntime:
         if not decision.allowed:
             logger.info("navigation rejected: %s", decision.reason)
             return
-        self._submit(Navigate(direction), timestamp_ns, timings)
+        self._submit(Navigate(direction), timestamp_ns, timings, onset_ns=onset_ns)
 
     def _click(
         self, event: SemanticEvent, timings: FrameTimings | None
     ) -> TransitionRecord | None:
-        update = self.clicks.on_event(event)
+        update = self.clicks.on_event(event, timings=timings)
         if update.dispatch is not None:
+            origin = update.origin
             snapshot = self._snapshot(event.timestamp_ns)
             decision = gate_click(
                 self.manager,
@@ -603,12 +635,40 @@ class AirCueRuntime:
                 foreground=self._foreground(snapshot),
             )
             if decision.payload is not None:
-                self._submit(decision.payload, event.timestamp_ns, timings)
+                self._submit(
+                    decision.payload,
+                    event.timestamp_ns,
+                    timings if origin is None else origin.timings,
+                    onset_ns=event.onset_ns if origin is None else origin.event.onset_ns,
+                )
             else:
                 logger.info("click rejected: %s", decision.reason)
         if update.transition is not None:
             self._after_transition(update.transition)
         return update.transition
+
+    def _record_state_metrics(
+        self,
+        event: SemanticEvent,
+        timings: FrameTimings | None,
+        record: TransitionRecord,
+    ) -> None:
+        if not self.instrument:
+            return
+        name = event.action.value
+        response_ns = max(0, record.timestamp_ns - event.onset_ns)
+        self.metrics.record(
+            f"{name}.pipeline", response_ns, timestamp_ns=record.timestamp_ns
+        )
+        self.metrics.record(
+            f"{name}.gesture_response", response_ns, timestamp_ns=record.timestamp_ns
+        )
+        if timings is not None and timings.capture_ts_ns is not None:
+            self.metrics.record(
+                f"{name}.capture_to_action",
+                max(0, record.timestamp_ns - timings.capture_ts_ns),
+                timestamp_ns=record.timestamp_ns,
+            )
 
     def _observe_hand(self, sample: HandSample, now_ns: int) -> None:
         report = self.safety.tracking(
@@ -653,7 +713,12 @@ class AirCueRuntime:
             sensitivity=self.config.pointer.sensitivity,
         )
         if mapped is not None:
-            self._submit(PointerMove(*mapped), sample.timestamp_ns, sample.timings)
+            self._submit(
+                PointerMove(*mapped),
+                sample.timestamp_ns,
+                sample.timings,
+                onset_ns=sample.timestamp_ns,
+            )
 
     def _emit_scroll(self, sample: HandSample | None) -> None:
         if sample is None or self.state is not InteractionState.SCROLL_MODE:
@@ -667,23 +732,33 @@ class AirCueRuntime:
             foreground=self._foreground(snapshot),
         )
         if update.notches:
-            self._submit(Scroll(update.notches), sample.timestamp_ns, sample.timings)
+            self._submit(
+                Scroll(update.notches),
+                sample.timestamp_ns,
+                sample.timings,
+                onset_ns=sample.timestamp_ns,
+            )
 
     def _expire_click(self, now_ns: int) -> None:
-        dispatch = self.clicks.advance(now_ns)
-        if dispatch is None:
+        update = self.clicks.advance(now_ns)
+        if update.dispatch is None:
             return
+        origin = update.origin
         snapshot = self._snapshot(now_ns)
         decision = gate_click(
             self.manager,
-            dispatch,
+            update.dispatch,
             self.state,
             snapshot.capabilities,
             foreground=self._foreground(snapshot),
         )
-        # shortcut: expired clicks carry no frame timings; 8.4 retains origin metadata.
         if decision.payload is not None:
-            self._submit(decision.payload, now_ns)
+            self._submit(
+                decision.payload,
+                now_ns,
+                None if origin is None else origin.timings,
+                onset_ns=None if origin is None else origin.event.onset_ns,
+            )
         else:
             logger.info("click rejected: %s", decision.reason)
 
@@ -699,6 +774,8 @@ class AirCueRuntime:
         if self.worker is None:
             return
         for outcome in self.worker.drain_outcomes():
+            if outcome.status is DispatchStatus.DELIVERED and self.instrument:
+                self._record_dispatch_metrics(outcome)
             if outcome.error is None:
                 continue
             record = apply_error(
@@ -719,6 +796,27 @@ class AirCueRuntime:
                 TransitionTrigger.UNRECOVERABLE_ADAPTER_ERROR,
                 now_ns,
                 reason="adapter unresponsive",
+            )
+
+    def _record_dispatch_metrics(self, outcome: DispatchOutcome) -> None:
+        action = outcome.action or _action_name(outcome.payload)
+        completed_ns = outcome.completed_ns
+        self.metrics.record(
+            f"{action}.dispatch",
+            max(0, completed_ns - outcome.enqueued_ns),
+            timestamp_ns=completed_ns,
+        )
+        if outcome.onset_ns is not None:
+            self.metrics.record(
+                f"{action}.gesture_response",
+                max(0, completed_ns - outcome.onset_ns),
+                timestamp_ns=completed_ns,
+            )
+        if outcome.capture_ts_ns is not None:
+            self.metrics.record(
+                f"{action}.capture_to_action",
+                max(0, completed_ns - outcome.capture_ts_ns),
+                timestamp_ns=completed_ns,
             )
 
     def _apply_pending_faults(self, now_ns: int) -> None:
@@ -827,16 +925,29 @@ class AirCueRuntime:
         payload: CommandPayload,
         timestamp_ns: int,
         timings: FrameTimings | None = None,
+        *,
+        onset_ns: int | None = None,
     ) -> bool:
         if self.worker is None:
             return False
-        return self.worker.submit(
+        action = _action_name(payload)
+        accepted = self.worker.submit(
             payload,
             generation=self.machine.generation,
             target=self._snapshot(timestamp_ns),
             now_ns=timestamp_ns,
             timings=timings,
+            action=action,
+            onset_ns=onset_ns,
+            capture_ts_ns=None if timings is None else timings.capture_ts_ns,
         )
+        if accepted and self.instrument and onset_ns is not None:
+            self.metrics.record(
+                f"{action}.pipeline",
+                max(0, timestamp_ns - onset_ns),
+                timestamp_ns=timestamp_ns,
+            )
+        return accepted
 
     def _snapshot(self, timestamp_ns: int) -> TargetSnapshot:
         if self.adapter is not None:

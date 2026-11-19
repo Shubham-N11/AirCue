@@ -41,6 +41,8 @@ class FrameTimings:
     """Mutable stage spans shared by a frame, its gesture, and its command."""
 
     spans: list[StageSpan] = field(default_factory=list)
+    # Frame-clock capture timestamp of the frame that produced the action.
+    capture_ts_ns: int | None = None
 
     def record(
         self,

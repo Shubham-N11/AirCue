@@ -186,9 +186,9 @@ def test_a_single_click_reaches_the_adapter_once() -> None:
     controller = ClickController(machine)
 
     controller.on_event(candidate(0))
-    dispatch = controller.advance(350 * MS)
-    assert dispatch is ClickDispatch.SINGLE
-    pipeline.click(dispatch)
+    update = controller.advance(350 * MS)
+    assert update.dispatch is ClickDispatch.SINGLE
+    pipeline.click(update.dispatch)
 
     assert pipeline.adapter.payloads == [Click()]
 

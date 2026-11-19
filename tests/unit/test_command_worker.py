@@ -107,11 +107,22 @@ def test_one_worker_dispatches_in_fifo_order() -> None:
 
 def test_dispatch_records_queue_wait_and_adapter_execution_spans() -> None:
     adapter = RecordingAdapter()
-    subject = build(adapter)
-    timings = FrameTimings()
+    clock = Clock()
+    subject = build(adapter, clock)
+    timings = FrameTimings(capture_ts_ns=1)
+    clock.now = 5 * MS
 
     assert (
-        subject.submit(NEXT, generation=0, target=TARGET, now_ns=0, timings=timings)
+        subject.submit(
+            NEXT,
+            generation=0,
+            target=TARGET,
+            now_ns=0,
+            timings=timings,
+            action="next_slide",
+            onset_ns=0,
+            capture_ts_ns=1,
+        )
         is True
     )
     subject.start()
@@ -119,6 +130,11 @@ def test_dispatch_records_queue_wait_and_adapter_execution_spans() -> None:
 
     outcome = subject.drain_outcomes()[0]
     assert outcome.timings is timings
+    assert outcome.action == "next_slide"
+    assert outcome.onset_ns == 0
+    assert outcome.capture_ts_ns == 1
+    assert outcome.enqueued_ns == 0
+    assert outcome.completed_ns == 5 * MS
     assert [span.stage for span in timings.spans] == [
         Stage.DISPATCH_QUEUE_WAIT,
         Stage.ADAPTER_EXECUTION,

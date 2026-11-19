@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from aircue.commands.commands import Command, CommandRejection
 from aircue.commands.manager import CommandManager
 from aircue.gestures.semantic import GestureAction, SemanticEvent
 from aircue.gestures.vocabulary import Gesture
+from aircue.performance.timing import FrameTimings
 from aircue.presentation.adapter import Click, DoubleClick
 from aircue.presentation.target import TargetCapabilities
 from aircue.state.machine import StateMachine, TransitionRecord
@@ -61,9 +62,18 @@ class ClickArbiter:
 
 
 @dataclass(frozen=True)
+class ClickOrigin:
+    """The frame and onset that started the pending click window."""
+
+    event: SemanticEvent
+    timings: FrameTimings | None = None
+
+
+@dataclass(frozen=True)
 class ClickUpdate:
     dispatch: ClickDispatch | None = None
     transition: TransitionRecord | None = None
+    origin: ClickOrigin | None = field(default=None, compare=False)
 
 
 class ClickController:
@@ -79,21 +89,29 @@ class ClickController:
     ) -> None:
         self._machine = machine
         self._arbiter = ClickArbiter(double_click_window_ms=double_click_window_ms)
+        self._pending_origin: ClickOrigin | None = None
 
     @property
     def pending(self) -> bool:
         return self._arbiter.pending
 
-    def on_event(self, event: SemanticEvent) -> ClickUpdate:
+    def on_event(
+        self, event: SemanticEvent, *, timings: FrameTimings | None = None
+    ) -> ClickUpdate:
         if event.action is GestureAction.CLICK_CANDIDATE:
             if self._machine.state is not InteractionState.POINTER_MODE:
                 return ClickUpdate()
-            return ClickUpdate(dispatch=self._arbiter.candidate(event.timestamp_ns))
+            previous, self._pending_origin = self._pending_origin, None
+            dispatch = self._arbiter.candidate(event.timestamp_ns)
+            if dispatch is ClickDispatch.DOUBLE:
+                return ClickUpdate(dispatch=dispatch, origin=previous)
+            self._pending_origin = ClickOrigin(event, timings)
+            return ClickUpdate(dispatch=dispatch, origin=previous)
         if (
             event.action is GestureAction.EXIT_POINTER_MODE
             and event.gesture is Gesture.PINCH
         ):
-            self._arbiter.cancel()
+            self.cancel()
             return ClickUpdate(
                 transition=self._machine.apply(
                     TransitionTrigger.LONG_PINCH,
@@ -103,11 +121,16 @@ class ClickController:
             )
         return ClickUpdate()
 
-    def advance(self, now_ns: int) -> ClickDispatch | None:
-        return self._arbiter.advance(now_ns)
+    def advance(self, now_ns: int) -> ClickUpdate:
+        dispatch = self._arbiter.advance(now_ns)
+        if dispatch is None:
+            return ClickUpdate()
+        origin, self._pending_origin = self._pending_origin, None
+        return ClickUpdate(dispatch=dispatch, origin=origin)
 
     def cancel(self) -> None:
         self._arbiter.cancel()
+        self._pending_origin = None
 
 
 class ClickRejection(StrEnum):

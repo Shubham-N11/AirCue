@@ -180,6 +180,22 @@ def event(action: GestureAction, milliseconds: int, gesture: Gesture) -> Semanti
     )
 
 
+def event_with_onset(
+    action: GestureAction,
+    onset_ms: int,
+    timestamp_ms: int,
+    gesture: Gesture,
+) -> SemanticEvent:
+    return SemanticEvent(
+        action=action,
+        gesture=gesture,
+        onset_ns=onset_ms * MS,
+        onset_sequence=0,
+        timestamp_ns=timestamp_ms * MS,
+        confidence=0.9,
+    )
+
+
 def activate(runtime: AirCueRuntime, milliseconds: int) -> None:
     record = runtime.handle_event(
         event(GestureAction.ACTIVATE, milliseconds, Gesture.THUMBS_UP)
@@ -831,6 +847,87 @@ def test_a_wedged_command_worker_is_abandoned_and_shutdown_completes(
         runtime.close()
 
 
+def test_state_action_metrics_end_at_the_accepted_transition() -> None:
+    with session() as (runtime, _adapter, clock, tracker):
+        activate(runtime, 100)
+        tracker.observations = (fist_observation(),)
+        runtime.process_frame(frame(200, 1, FrameTimings()))
+        confirmed = runtime.process_frame(frame(400, 2, FrameTimings()))
+        assert confirmed is not None
+
+        runtime.tick(at(clock, 450))
+
+        assert runtime.state is S.PAUSED
+        assert runtime.metrics.values("pause_tracking.pipeline") == (200 * MS,)
+        assert runtime.metrics.values("pause_tracking.gesture_response") == (200 * MS,)
+        assert runtime.metrics.values("pause_tracking.capture_to_action") == (0,)
+
+
+def test_single_click_metrics_include_confirmation_and_pending_window() -> None:
+    with session() as (runtime, adapter, clock, _tracker):
+        activate(runtime, 100)
+        runtime.handle_event(
+            event(GestureAction.ENTER_POINTER_MODE, 200, Gesture.PINCH)
+        )
+        runtime.handle_event(
+            event_with_onset(
+                GestureAction.CLICK_CANDIDATE, 200, 300, Gesture.PINCH_RELEASE
+            ),
+            timings=FrameTimings(capture_ts_ns=300 * MS),
+        )
+
+        runtime.tick(at(clock, 650))
+        wait_for(lambda: adapter.executed == [Click()], "the pending single click")
+        runtime.tick(at(clock, 650))
+
+        assert runtime.metrics.values("click.pipeline") == (450 * MS,)
+        assert runtime.metrics.values("click.gesture_response") == (450 * MS,)
+        assert runtime.metrics.values("click.capture_to_action") == (350 * MS,)
+        assert runtime.metrics.values("click.dispatch") == (0,)
+
+
+def test_exit_metrics_include_the_hold_and_end_entering_exiting() -> None:
+    with session() as (runtime, _adapter, clock, _tracker):
+        activate(runtime, 100)
+
+        record = runtime.handle_event(
+            event_with_onset(GestureAction.EXIT_REQUEST, 0, 1_500, Gesture.SHAKA),
+            timings=FrameTimings(capture_ts_ns=1_500 * MS),
+        )
+
+        assert record is not None and record.accepted is True
+        assert runtime.state is S.EXITING
+        assert runtime.metrics.values("exit_request.gesture_response") == (1_500 * MS,)
+        assert runtime.metrics.values("exit_request.capture_to_action") == (0,)
+        at(clock, 1_500)
+        runtime.shutdown()
+        assert runtime.machine.terminated is True
+
+
+def test_presentation_command_records_pipeline_dispatch_and_response() -> None:
+    with session() as (runtime, adapter, clock, _tracker):
+        activate(runtime, 100)
+        at(clock, 250)
+
+        runtime.handle_event(
+            event_with_onset(
+                GestureAction.NEXT_SLIDE, 200, 250, Gesture.OPEN_PALM_CLOCKWISE
+            ),
+            timings=FrameTimings(capture_ts_ns=250 * MS),
+        )
+
+        wait_for(
+            lambda: adapter.executed == [Navigate(SlideDirection.NEXT)],
+            "one next slide",
+        )
+        runtime.tick(at(clock, 250))
+
+        assert runtime.metrics.values("next_slide.pipeline") == (50 * MS,)
+        assert runtime.metrics.values("next_slide.dispatch") == (0,)
+        assert runtime.metrics.values("next_slide.gesture_response") == (50 * MS,)
+        assert runtime.metrics.values("next_slide.capture_to_action") == (0,)
+
+
 def test_process_frame_records_ordered_stages_and_temporal_span() -> None:
     with session() as (runtime, _adapter, _clock, tracker):
         activate(runtime, 100)
@@ -891,5 +988,6 @@ def test_disabled_instrumentation_still_processes_frames_and_ticks() -> None:
 
         runtime.tick(at(clock, 400))
         assert runtime.state is S.PAUSED
+        assert runtime.metrics.names() == ()
     finally:
         runtime.close()

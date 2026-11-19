@@ -51,6 +51,9 @@ class CommandEnvelope:
     expires_ns: int
     timings: FrameTimings | None = None
     enqueued_perf_ns: int | None = None
+    action: str = ""
+    onset_ns: int | None = None
+    capture_ts_ns: int | None = None
 
 
 @dataclass(frozen=True)
@@ -62,6 +65,11 @@ class DispatchOutcome:
     detail: str = ""
     elapsed_ns: int = 0
     timings: FrameTimings | None = None
+    enqueued_ns: int = 0
+    completed_ns: int = 0
+    action: str = ""
+    onset_ns: int | None = None
+    capture_ts_ns: int | None = None
 
 
 @dataclass(frozen=True)
@@ -184,6 +192,9 @@ class CommandWorker:
         target: TargetSnapshot,
         now_ns: int | None = None,
         timings: FrameTimings | None = None,
+        action: str = "",
+        onset_ns: int | None = None,
+        capture_ts_ns: int | None = None,
     ) -> bool:
         """Queue one command; False when stopped, unresponsive, or full."""
         now = self._clock_ns() if now_ns is None else now_ns
@@ -199,6 +210,9 @@ class CommandWorker:
                 enqueued_perf_ns=(
                     time.perf_counter_ns() if timings is not None else None
                 ),
+                action=action,
+                onset_ns=onset_ns,
+                capture_ts_ns=capture_ts_ns,
             )
             tail = self._queue[-1] if self._queue else None
             coalesced = (
@@ -271,6 +285,9 @@ class CommandWorker:
         *,
         timings: FrameTimings | None = None,
         enqueued_perf_ns: int | None = None,
+        action: str = "",
+        onset_ns: int | None = None,
+        capture_ts_ns: int | None = None,
     ) -> CommandEnvelope:
         self._sequence += 1
         return CommandEnvelope(
@@ -282,6 +299,9 @@ class CommandWorker:
             expires_ns=now_ns + self._ttl_for(payload),
             timings=timings,
             enqueued_perf_ns=enqueued_perf_ns,
+            action=action,
+            onset_ns=onset_ns,
+            capture_ts_ns=capture_ts_ns,
         )
 
     def _ttl_for(self, payload: CommandPayload) -> int:
@@ -433,6 +453,7 @@ class CommandWorker:
         detail: str = "",
         elapsed_ns: int = 0,
     ) -> None:
+        completed_ns = self._clock_ns()
         outcome = DispatchOutcome(
             sequence=envelope.sequence,
             payload=envelope.payload,
@@ -441,6 +462,11 @@ class CommandWorker:
             detail=detail,
             elapsed_ns=elapsed_ns,
             timings=envelope.timings,
+            enqueued_ns=envelope.enqueued_ns,
+            completed_ns=completed_ns,
+            action=envelope.action,
+            onset_ns=envelope.onset_ns,
+            capture_ts_ns=envelope.capture_ts_ns,
         )
         with self._condition:
             self._outcomes.append(outcome)
@@ -465,5 +491,5 @@ class CommandWorker:
             error=None if error is None else error.value,
             detail=detail,
             elapsed_ns=elapsed_ns,
-            timestamp_ns=self._clock_ns(),
+            timestamp_ns=completed_ns,
         )
