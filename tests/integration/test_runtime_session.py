@@ -20,6 +20,7 @@ from aircue.config.schema import Config
 from aircue.diagnostics.session_log import close_session_logging, configure_session_logging
 from aircue.gestures.semantic import GestureAction, SemanticEvent
 from aircue.gestures.vocabulary import Gesture
+from aircue.performance.timing import FrameTimings, Stage
 from aircue.presentation.adapter import (
     AdapterError,
     AdapterResult,
@@ -50,6 +51,7 @@ from aircue.vision.types import (
     RING_PIP,
     RING_TIP,
     THUMB_IP,
+    THUMB_MCP,
     THUMB_TIP,
     HandObservation,
 )
@@ -367,8 +369,25 @@ def pointer_observation(
     )
 
 
-def frame(milliseconds: int, sequence: int) -> Frame:
-    return Frame(np.zeros((2, 2, 3), np.uint8), milliseconds * MS, sequence)
+def fist_observation() -> HandObservation:
+    from tests.integration.test_gesture_pipeline import curled_tip, pose_overrides
+
+    overrides = pose_overrides(curled=("index", "middle", "ring", "pinky"))
+    overrides[THUMB_TIP] = curled_tip(THUMB_MCP, THUMB_IP)
+    return HandObservation(
+        track_id=0,
+        landmarks=make_landmarks(overrides, confidence=0.9),
+        confidence=0.9,
+        handedness="Right",
+    )
+
+
+def frame(
+    milliseconds: int, sequence: int, timings: FrameTimings | None = None
+) -> Frame:
+    return Frame(
+        np.zeros((2, 2, 3), np.uint8), milliseconds * MS, sequence, timings
+    )
 
 
 def test_pointer_mode_moves_the_cursor_on_the_identified_monitor() -> None:
@@ -809,4 +828,68 @@ def test_a_wedged_command_worker_is_abandoned_and_shutdown_completes(
         )
     finally:
         adapter.gate.set()
+        runtime.close()
+
+
+def test_process_frame_records_ordered_stages_and_temporal_span() -> None:
+    with session() as (runtime, _adapter, _clock, tracker):
+        activate(runtime, 100)
+        tracker.observations = (fist_observation(),)
+
+        first = FrameTimings()
+        assert runtime.process_frame(frame(200, 1, first)) is None
+        second = FrameTimings()
+        event = runtime.process_frame(frame(400, 2, second))
+
+        assert event is not None
+        assert event.action is GestureAction.PAUSE_TRACKING
+        assert [span.stage for span in second.spans] == [
+            Stage.FEATURE_EXTRACTION,
+            Stage.CLASSIFICATION,
+            Stage.TEMPORAL_CONFIRMATION,
+        ]
+        assert all(span.end_ns >= span.start_ns for span in second.spans)
+        temporal = second.spans[-1]
+        assert temporal.clock == "frame"
+        assert (temporal.start_ns, temporal.end_ns) == (
+            event.onset_ns,
+            event.timestamp_ns,
+        )
+
+
+def test_handle_event_records_a_command_validation_span() -> None:
+    with session() as (runtime, _adapter, _clock, _tracker):
+        activate(runtime, 100)
+        timings = FrameTimings()
+
+        runtime.handle_event(
+            event(GestureAction.NEXT_SLIDE, 200, Gesture.OPEN_PALM_CLOCKWISE),
+            timings=timings,
+        )
+
+        assert [span.stage for span in timings.spans] == [Stage.COMMAND_VALIDATION]
+
+
+def test_disabled_instrumentation_still_processes_frames_and_ticks() -> None:
+    clock = Clock()
+    tracker = FakeTracker((fist_observation(),))
+    runtime = AirCueRuntime(
+        Config(),
+        source=FakeSource(),
+        tracker=tracker,
+        adapter=FakeAdapter(),
+        clock_ns=clock,
+        key_down=lambda _key: False,
+        instrument=False,
+    )
+    assert runtime.initialize().accepted is True
+    try:
+        activate(runtime, 100)
+        assert runtime.process_frame(frame(200, 1)) is None
+        event = runtime.process_frame(frame(400, 2))
+        assert event is not None and event.action is GestureAction.PAUSE_TRACKING
+
+        runtime.tick(at(clock, 400))
+        assert runtime.state is S.PAUSED
+    finally:
         runtime.close()

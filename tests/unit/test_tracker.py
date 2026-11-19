@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from aircue.capture import Frame
+from aircue.performance.timing import FrameTimings, Stage
 from aircue.vision import MediaPipeHandTracker, TrackerError, TrackerInitializationError
 
 
@@ -132,3 +133,35 @@ def test_close_is_forwarded(tmp_path: Path) -> None:
     source = MediaPipeHandTracker(model_file(tmp_path), landmarker_factory=lambda: landmarker)
     source.close()
     assert landmarker.closed is True
+
+
+def test_instrumented_detection_records_ordered_stage_spans(tmp_path: Path) -> None:
+    result = FakeResult([hand()], [[FakeCategory("Right", 0.91)]])
+    source = MediaPipeHandTracker(
+        model_file(tmp_path), landmarker_factory=lambda: FakeLandmarker(result)
+    )
+    timings = FrameTimings()
+
+    source.detect(
+        Frame(np.zeros((360, 640, 3), dtype=np.uint8), 1, 1, timings=timings)
+    )
+
+    assert [span.stage for span in timings.spans] == [
+        Stage.PREPROCESSING,
+        Stage.INFERENCE,
+        Stage.LANDMARK_PROCESSING,
+    ]
+    assert all(span.clock == "perf" for span in timings.spans)
+    assert all(span.end_ns >= span.start_ns for span in timings.spans)
+    assert [span.start_ns for span in timings.spans] == sorted(
+        span.start_ns for span in timings.spans
+    )
+
+
+def test_uninstrumented_detection_records_nothing(tmp_path: Path) -> None:
+    result = FakeResult([hand()], [[FakeCategory("Right", 0.91)]])
+    source = MediaPipeHandTracker(
+        model_file(tmp_path), landmarker_factory=lambda: FakeLandmarker(result)
+    )
+
+    assert len(source.detect(frame())) == 1

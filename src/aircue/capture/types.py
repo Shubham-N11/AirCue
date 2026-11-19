@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from aircue.performance.timing import FrameTimings
+
 
 @dataclass(frozen=True)
 class CaptureMode:
@@ -19,6 +21,7 @@ class Frame:
     image: np.ndarray
     capture_ts_ns: int
     sequence: int
+    timings: FrameTimings | None = None
 
 
 @dataclass(frozen=True)

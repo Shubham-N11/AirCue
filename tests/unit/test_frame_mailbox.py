@@ -11,6 +11,7 @@ from aircue.capture import (
     FrameMailbox,
 )
 from aircue.capture.mailbox import CaptureThread
+from aircue.performance.timing import Stage
 
 
 class CountingSource:
@@ -91,6 +92,32 @@ def test_capture_reports_errors_and_keeps_running() -> None:
     try:
         wait_for(lambda: len(errors) >= 2)
         assert capture.is_alive
+    finally:
+        assert capture.stop()
+
+
+def test_capture_records_a_capture_span_when_instrumented() -> None:
+    mailbox = FrameMailbox()
+    capture = CaptureThread(
+        CountingSource(), mailbox, retry_delay_s=0.0, instrument=True
+    )
+    capture.start()
+    try:
+        frame = mailbox.take(1.0)
+        assert frame is not None and frame.timings is not None
+        assert [span.stage for span in frame.timings.spans] == [Stage.CAPTURE]
+        assert frame.timings.spans[0].end_ns >= frame.timings.spans[0].start_ns
+    finally:
+        assert capture.stop()
+
+
+def test_capture_omits_timings_when_not_instrumented() -> None:
+    mailbox = FrameMailbox()
+    capture = CaptureThread(CountingSource(), mailbox, retry_delay_s=0.0)
+    capture.start()
+    try:
+        frame = mailbox.take(1.0)
+        assert frame is not None and frame.timings is None
     finally:
         assert capture.stop()
 

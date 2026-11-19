@@ -7,7 +7,7 @@ import queue
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Generic, TypeVar
 
@@ -33,6 +33,7 @@ from aircue.gestures.classifiers import is_pointer_pose
 from aircue.gestures.recognizer import GestureRecognizer
 from aircue.gestures.semantic import GestureAction, SemanticEvent
 from aircue.gestures.vocabulary import Gesture
+from aircue.performance.timing import FrameTimings, Stage, measure
 from aircue.presentation.adapter import (
     CommandPayload,
     Navigate,
@@ -98,6 +99,7 @@ class HandSample:
     timestamp_ns: int
     present: bool
     absent_since_ns: int | None = None
+    timings: FrameTimings | None = None
 
 
 T = TypeVar("T")
@@ -134,9 +136,11 @@ class AirCueRuntime:
         indicator: StatusIndicator | None = None,
         clock_ns: Callable[[], int] = time.monotonic_ns,
         key_down: Callable[[int], bool] | None = None,
+        instrument: bool = True,
     ) -> None:
         self.config = config
         self.clock_ns = clock_ns
+        self.instrument = instrument
         self.machine = StateMachine()
         self.feedback = StatusFeedback(indicator or _SilentIndicator())
         self.manager = CommandManager()
@@ -177,7 +181,9 @@ class AirCueRuntime:
             reconnect_backoff_ms=config.camera.reconnect_backoff_ms,
         )
         self.frames = FrameMailbox()
-        self.events: queue.Queue[SemanticEvent] = queue.Queue(maxsize=_EVENT_QUEUE_SIZE)
+        self.events: queue.Queue[tuple[SemanticEvent, FrameTimings | None]] = queue.Queue(
+            maxsize=_EVENT_QUEUE_SIZE
+        )
         self.hands = _LatestSlot[HandSample]()
         self._source = source
         self._tracker = tracker
@@ -268,7 +274,10 @@ class AirCueRuntime:
         self._last_capture_ns = self.clock_ns()
 
         self._capture = CaptureThread(
-            self.source, self.frames, on_error=self._record_capture_error
+            self.source,
+            self.frames,
+            on_error=self._record_capture_error,
+            instrument=self.instrument,
         )
         self._vision_thread = threading.Thread(
             target=self._vision_loop, name="aircue-vision", daemon=True
@@ -354,18 +363,20 @@ class AirCueRuntime:
         try:
             observations = self.tracker.detect(frame)
             selection = self.selection.update(observations, timestamp_ns)
-            hand = (
-                extract_hand_record(
-                    selection.observation,
-                    confidence_threshold=self.config.vision.confidence_threshold,
-                    finger_extended_angle_deg=self.config.gestures.finger_extended_angle_deg,
-                )
-                if selection.observation is not None
-                else None
-            )
+            if selection.observation is None:
+                hand = None
+            else:
+                with measure(frame.timings, Stage.FEATURE_EXTRACTION):
+                    hand = extract_hand_record(
+                        selection.observation,
+                        confidence_threshold=self.config.vision.confidence_threshold,
+                        finger_extended_angle_deg=self.config.gestures.finger_extended_angle_deg,
+                    )
         except InvalidLandmarkFrameError:
             self._invalid_frames += 1
-            self.hands.publish(HandSample(None, timestamp_ns, False))
+            self.hands.publish(
+                HandSample(None, timestamp_ns, False, timings=frame.timings)
+            )
             self.recognizer.update(None, self.state, timestamp_ns, sequence=frame.sequence)
             return None
         except Exception as exc:
@@ -374,15 +385,29 @@ class AirCueRuntime:
 
         presence = self.presence.observe(hand is not None, timestamp_ns)
         self.hands.publish(
-            HandSample(hand, timestamp_ns, presence.present, presence.first_absence_ts_ns)
+            HandSample(
+                hand,
+                timestamp_ns,
+                presence.present,
+                presence.first_absence_ts_ns,
+                frame.timings,
+            )
         )
-        event = self.recognizer.update(
-            None if (selection.suppress_recognition or hand is None) else hand,
-            self.state,
-            timestamp_ns,
-            sequence=frame.sequence,
-        )
+        with measure(frame.timings, Stage.CLASSIFICATION):
+            event = self.recognizer.update(
+                None if (selection.suppress_recognition or hand is None) else hand,
+                self.state,
+                timestamp_ns,
+                sequence=frame.sequence,
+            )
         if event is not None:
+            if frame.timings is not None:
+                frame.timings.record(
+                    Stage.TEMPORAL_CONFIRMATION,
+                    event.onset_ns,
+                    event.timestamp_ns,
+                    clock="frame",
+                )
             record_event(
                 "gesture",
                 generation=self.machine.generation,
@@ -394,14 +419,22 @@ class AirCueRuntime:
                 sequence=frame.sequence,
             )
             try:
-                self.events.put_nowait(event)
+                self.events.put_nowait((event, frame.timings))
             except queue.Full:
                 self._dropped_events += 1
                 logger.warning("semantic event queue is full; dropped %r", event.action)
         return event
 
-    def handle_event(self, event: SemanticEvent) -> TransitionRecord | None:
+    def handle_event(
+        self, event: SemanticEvent, *, timings: FrameTimings | None = None
+    ) -> TransitionRecord | None:
         """Apply one semantic event on the state thread, revalidating its target."""
+        with measure(timings, Stage.COMMAND_VALIDATION):
+            return self._handle_event(event, timings)
+
+    def _handle_event(
+        self, event: SemanticEvent, timings: FrameTimings | None
+    ) -> TransitionRecord | None:
         action = event.action
         timestamp_ns = event.timestamp_ns
         record_event(
@@ -443,13 +476,13 @@ class AirCueRuntime:
                 timestamp_ns,
             )
         if action in (GestureAction.NEXT_SLIDE, GestureAction.PREV_SLIDE):
-            self._navigate(action, timestamp_ns)
+            self._navigate(action, timestamp_ns, timings)
             return None
         if action is GestureAction.CLICK_CANDIDATE or (
             action is GestureAction.EXIT_POINTER_MODE
             and event.gesture is Gesture.PINCH
         ):
-            return self._click(event)
+            return self._click(event, timings)
         return None
 
     def tick(self, now_ns: int | None = None) -> None:
@@ -470,9 +503,17 @@ class AirCueRuntime:
 
     def _vision_loop(self) -> None:
         while not self._stop_event.is_set():
+            wait_started_ns = time.perf_counter_ns()
             frame = self.frames.take(0.1)
             if frame is None:
                 continue
+            if self.instrument:
+                timings = frame.timings or FrameTimings()
+                timings.record(
+                    Stage.QUEUE_WAIT, wait_started_ns, time.perf_counter_ns()
+                )
+                if timings is not frame.timings:
+                    frame = replace(frame, timings=timings)
             self.process_frame(frame)
             if self._vision_error is not None:
                 return
@@ -531,7 +572,12 @@ class AirCueRuntime:
             return None
         return self._transition(trigger, timestamp_ns, reason=command.value)
 
-    def _navigate(self, action: GestureAction, timestamp_ns: int) -> None:
+    def _navigate(
+        self,
+        action: GestureAction,
+        timestamp_ns: int,
+        timings: FrameTimings | None,
+    ) -> None:
         if action is GestureAction.NEXT_SLIDE:
             command, direction = Command.NEXT_SLIDE, SlideDirection.NEXT
         else:
@@ -541,9 +587,11 @@ class AirCueRuntime:
         if not decision.allowed:
             logger.info("navigation rejected: %s", decision.reason)
             return
-        self._submit(Navigate(direction), timestamp_ns)
+        self._submit(Navigate(direction), timestamp_ns, timings)
 
-    def _click(self, event: SemanticEvent) -> TransitionRecord | None:
+    def _click(
+        self, event: SemanticEvent, timings: FrameTimings | None
+    ) -> TransitionRecord | None:
         update = self.clicks.on_event(event)
         if update.dispatch is not None:
             snapshot = self._snapshot(event.timestamp_ns)
@@ -555,7 +603,7 @@ class AirCueRuntime:
                 foreground=self._foreground(snapshot),
             )
             if decision.payload is not None:
-                self._submit(decision.payload, event.timestamp_ns)
+                self._submit(decision.payload, event.timestamp_ns, timings)
             else:
                 logger.info("click rejected: %s", decision.reason)
         if update.transition is not None:
@@ -605,7 +653,7 @@ class AirCueRuntime:
             sensitivity=self.config.pointer.sensitivity,
         )
         if mapped is not None:
-            self._submit(PointerMove(*mapped), sample.timestamp_ns)
+            self._submit(PointerMove(*mapped), sample.timestamp_ns, sample.timings)
 
     def _emit_scroll(self, sample: HandSample | None) -> None:
         if sample is None or self.state is not InteractionState.SCROLL_MODE:
@@ -619,7 +667,7 @@ class AirCueRuntime:
             foreground=self._foreground(snapshot),
         )
         if update.notches:
-            self._submit(Scroll(update.notches), sample.timestamp_ns)
+            self._submit(Scroll(update.notches), sample.timestamp_ns, sample.timings)
 
     def _expire_click(self, now_ns: int) -> None:
         dispatch = self.clicks.advance(now_ns)
@@ -633,6 +681,7 @@ class AirCueRuntime:
             snapshot.capabilities,
             foreground=self._foreground(snapshot),
         )
+        # shortcut: expired clicks carry no frame timings; 8.4 retains origin metadata.
         if decision.payload is not None:
             self._submit(decision.payload, now_ns)
         else:
@@ -641,10 +690,10 @@ class AirCueRuntime:
     def _drain_events(self) -> None:
         while True:
             try:
-                event = self.events.get_nowait()
+                event, timings = self.events.get_nowait()
             except queue.Empty:
                 return
-            self.handle_event(event)
+            self.handle_event(event, timings=timings)
 
     def _drain_outcomes(self, now_ns: int) -> None:
         if self.worker is None:
@@ -773,7 +822,12 @@ class AirCueRuntime:
         if record.resulting is InteractionState.EXITING:
             self._stop_event.set()
 
-    def _submit(self, payload: CommandPayload, timestamp_ns: int) -> bool:
+    def _submit(
+        self,
+        payload: CommandPayload,
+        timestamp_ns: int,
+        timings: FrameTimings | None = None,
+    ) -> bool:
         if self.worker is None:
             return False
         return self.worker.submit(
@@ -781,6 +835,7 @@ class AirCueRuntime:
             generation=self.machine.generation,
             target=self._snapshot(timestamp_ns),
             now_ns=timestamp_ns,
+            timings=timings,
         )
 
     def _snapshot(self, timestamp_ns: int) -> TargetSnapshot:

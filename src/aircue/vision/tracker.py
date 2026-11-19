@@ -13,6 +13,7 @@ from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
 
 from aircue.capture import Frame
+from aircue.performance.timing import Stage, measure
 from aircue.vision.types import (
     HandObservation,
     Landmark,
@@ -64,33 +65,36 @@ class MediaPipeHandTracker:
             raise TrackerInitializationError(f"hand-landmark model failed to load: {exc}") from exc
 
     def detect(self, frame: Frame) -> tuple[HandObservation, ...]:
-        rgb = np.ascontiguousarray(cv2.cvtColor(frame.image, cv2.COLOR_BGR2RGB))
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        with measure(frame.timings, Stage.PREPROCESSING):
+            rgb = np.ascontiguousarray(cv2.cvtColor(frame.image, cv2.COLOR_BGR2RGB))
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         try:
-            result = self._landmarker.detect(mp_image)
+            with measure(frame.timings, Stage.INFERENCE):
+                result = self._landmarker.detect(mp_image)
         except Exception as exc:
             raise TrackerError(f"hand tracking failed: {exc}") from exc
 
-        observations: list[HandObservation] = []
-        handedness_groups = result.handedness or []
-        for index, raw_landmarks in enumerate(result.hand_landmarks or []):
-            categories = handedness_groups[index] if index < len(handedness_groups) else []
-            score = float(categories[0].score) if categories else 0.0
-            if score < self._confidence_threshold:
-                continue
-            label = str(categories[0].category_name) if categories else "Unknown"
-            landmarks = tuple(
-                Landmark(float(item.x), float(item.y), float(item.z), score)
-                for item in raw_landmarks
-            )
-            observations.append(
-                HandObservation(
-                    track_id=len(observations),
-                    landmarks=landmarks,
-                    confidence=score,
-                    handedness=label,
+        with measure(frame.timings, Stage.LANDMARK_PROCESSING):
+            observations: list[HandObservation] = []
+            handedness_groups = result.handedness or []
+            for index, raw_landmarks in enumerate(result.hand_landmarks or []):
+                categories = handedness_groups[index] if index < len(handedness_groups) else []
+                score = float(categories[0].score) if categories else 0.0
+                if score < self._confidence_threshold:
+                    continue
+                label = str(categories[0].category_name) if categories else "Unknown"
+                landmarks = tuple(
+                    Landmark(float(item.x), float(item.y), float(item.z), score)
+                    for item in raw_landmarks
                 )
-            )
+                observations.append(
+                    HandObservation(
+                        track_id=len(observations),
+                        landmarks=landmarks,
+                        confidence=score,
+                        handedness=label,
+                    )
+                )
         return tuple(observations)
 
     def close(self) -> None:

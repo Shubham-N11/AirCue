@@ -16,6 +16,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from aircue.diagnostics.session_log import record_event
+from aircue.performance.timing import FrameTimings, Stage
 from aircue.presentation.adapter import (
     AdapterError,
     AdapterResult,
@@ -48,6 +49,8 @@ class CommandEnvelope:
     payload: CommandPayload
     enqueued_ns: int
     expires_ns: int
+    timings: FrameTimings | None = None
+    enqueued_perf_ns: int | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,7 @@ class DispatchOutcome:
     error: AdapterError | None = None
     detail: str = ""
     elapsed_ns: int = 0
+    timings: FrameTimings | None = None
 
 
 @dataclass(frozen=True)
@@ -179,13 +183,23 @@ class CommandWorker:
         generation: int,
         target: TargetSnapshot,
         now_ns: int | None = None,
+        timings: FrameTimings | None = None,
     ) -> bool:
         """Queue one command; False when stopped, unresponsive, or full."""
         now = self._clock_ns() if now_ns is None else now_ns
         with self._condition:
             if self._stopping or self._unresponsive:
                 return False
-            envelope = self._envelope(payload, generation, target, now)
+            envelope = self._envelope(
+                payload,
+                generation,
+                target,
+                now,
+                timings=timings,
+                enqueued_perf_ns=(
+                    time.perf_counter_ns() if timings is not None else None
+                ),
+            )
             tail = self._queue[-1] if self._queue else None
             coalesced = (
                 tail is not None
@@ -254,6 +268,9 @@ class CommandWorker:
         generation: int,
         target: TargetSnapshot,
         now_ns: int,
+        *,
+        timings: FrameTimings | None = None,
+        enqueued_perf_ns: int | None = None,
     ) -> CommandEnvelope:
         self._sequence += 1
         return CommandEnvelope(
@@ -263,6 +280,8 @@ class CommandWorker:
             payload=payload,
             enqueued_ns=now_ns,
             expires_ns=now_ns + self._ttl_for(payload),
+            timings=timings,
+            enqueued_perf_ns=enqueued_perf_ns,
         )
 
     def _ttl_for(self, payload: CommandPayload) -> int:
@@ -313,6 +332,12 @@ class CommandWorker:
         self._last_refresh_ns = self._clock_ns()
 
     def _dispatch(self, envelope: CommandEnvelope) -> None:
+        if envelope.timings is not None and envelope.enqueued_perf_ns is not None:
+            envelope.timings.record(
+                Stage.DISPATCH_QUEUE_WAIT,
+                envelope.enqueued_perf_ns,
+                time.perf_counter_ns(),
+            )
         with self._condition:
             stopped = self._stopping or self._unresponsive
         if stopped:
@@ -339,11 +364,18 @@ class CommandWorker:
         with self._condition:
             self._in_call = True
             self._call_started_ns = started_ns
+        execution_started_ns = time.perf_counter_ns()
         try:
             result = self._adapter.execute(envelope.payload)
         except Exception as error:
             result = AdapterResult(AdapterError.INTERNAL, str(error))
         finally:
+            if envelope.timings is not None:
+                envelope.timings.record(
+                    Stage.ADAPTER_EXECUTION,
+                    execution_started_ns,
+                    time.perf_counter_ns(),
+                )
             elapsed_ns = self._clock_ns() - started_ns
             with self._condition:
                 self._in_call = False
@@ -408,6 +440,7 @@ class CommandWorker:
             error=error,
             detail=detail,
             elapsed_ns=elapsed_ns,
+            timings=envelope.timings,
         )
         with self._condition:
             self._outcomes.append(outcome)

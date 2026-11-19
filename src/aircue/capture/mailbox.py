@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
+from dataclasses import replace
 
 from aircue.capture.source import FrameSource
 from aircue.capture.types import CaptureError, Frame
+from aircue.performance.timing import FrameTimings, Stage
 
 
 class FrameMailbox:
@@ -61,11 +64,13 @@ class CaptureThread:
         *,
         on_error: Callable[[CaptureError], None] | None = None,
         retry_delay_s: float = 0.05,
+        instrument: bool = False,
     ) -> None:
         self._source = source
         self._mailbox = mailbox
         self._on_error = on_error
         self._retry_delay_s = retry_delay_s
+        self._instrument = instrument
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._frames_captured = 0
@@ -86,6 +91,7 @@ class CaptureThread:
 
     def _run(self) -> None:
         while not self._stop.is_set():
+            started_ns = time.perf_counter_ns()
             try:
                 frame = self._source.read()
             except CaptureError as exc:
@@ -94,6 +100,10 @@ class CaptureThread:
                 if self._retry_delay_s > 0:
                     self._stop.wait(self._retry_delay_s)
                 continue
+            if self._instrument:
+                timings = FrameTimings()
+                timings.record(Stage.CAPTURE, started_ns, time.perf_counter_ns())
+                frame = replace(frame, timings=timings)
             self._frames_captured += 1
             self._mailbox.publish(frame)
 

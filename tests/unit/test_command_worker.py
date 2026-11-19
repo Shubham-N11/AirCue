@@ -10,6 +10,7 @@ from aircue.dispatch.worker import (
     CommandWorker,
     DispatchStatus,
 )
+from aircue.performance.timing import FrameTimings, Stage
 from aircue.presentation.adapter import (
     AdapterError,
     AdapterResult,
@@ -101,6 +102,31 @@ def test_one_worker_dispatches_in_fifo_order() -> None:
     subject.start()
     assert wait_for(lambda: subject.stats().delivered == 3)
     assert adapter.executed == payloads
+    assert subject.stop() is True
+
+
+def test_dispatch_records_queue_wait_and_adapter_execution_spans() -> None:
+    adapter = RecordingAdapter()
+    subject = build(adapter)
+    timings = FrameTimings()
+
+    assert (
+        subject.submit(NEXT, generation=0, target=TARGET, now_ns=0, timings=timings)
+        is True
+    )
+    subject.start()
+    assert wait_for(lambda: subject.stats().delivered == 1)
+
+    outcome = subject.drain_outcomes()[0]
+    assert outcome.timings is timings
+    assert [span.stage for span in timings.spans] == [
+        Stage.DISPATCH_QUEUE_WAIT,
+        Stage.ADAPTER_EXECUTION,
+    ]
+    assert all(span.end_ns >= span.start_ns for span in timings.spans)
+    assert [span.start_ns for span in timings.spans] == sorted(
+        span.start_ns for span in timings.spans
+    )
     assert subject.stop() is True
 
 
