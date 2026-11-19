@@ -147,6 +147,14 @@ def test_load_explicit_file(tmp_path: Path) -> None:
     assert load_config(config_path).timing.resume_hold_ms == 300
 
 
+def test_a_utf8_bom_is_accepted(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"timing": {"resume_hold_ms": 300}}), encoding="utf-8-sig"
+    )
+    assert load_config(config_path).timing.resume_hold_ms == 300
+
+
 def test_load_missing_explicit_file_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="not found"):
         load_config(tmp_path / "absent.json")

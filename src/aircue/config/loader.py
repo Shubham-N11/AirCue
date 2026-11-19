@@ -34,7 +34,7 @@ def load_config(path: str | Path | None = None) -> Config:
         if not config_path.exists():
             raise ConfigError(f"configuration file not found: {config_path}")
     try:
-        with config_path.open("r", encoding="utf-8") as handle:
+        with config_path.open("r", encoding="utf-8-sig") as handle:
             raw = json.load(handle)
     except json.JSONDecodeError as exc:
         raise ConfigError(f"{config_path}: invalid JSON: {exc}") from exc
