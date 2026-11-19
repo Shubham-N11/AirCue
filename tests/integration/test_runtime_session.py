@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import threading
@@ -16,6 +17,7 @@ from aircue.app.hotkeys import VK_CONTROL, VK_MENU
 from aircue.app.runtime import AirCueRuntime
 from aircue.capture.types import CaptureOpenResult, Frame
 from aircue.config.schema import Config
+from aircue.diagnostics.session_log import close_session_logging, configure_session_logging
 from aircue.gestures.semantic import GestureAction, SemanticEvent
 from aircue.gestures.vocabulary import Gesture
 from aircue.presentation.adapter import (
@@ -602,3 +604,71 @@ def test_the_four_thread_runtime_starts_and_stops_cleanly() -> None:
     assert source.closed is True
     assert tracker.closed is True
     assert runtime.state is S.IDLE
+
+
+def rotated_observation(angle_deg: float) -> HandObservation:
+    from tests.integration.test_gesture_pipeline import pose_overrides, rotate
+
+    return HandObservation(
+        track_id=0,
+        landmarks=rotate(
+            make_landmarks(pose_overrides(), confidence=0.9), angle_deg
+        ),
+        confidence=0.9,
+        handedness="Right",
+    )
+
+
+def test_a_traced_command_shares_a_session_and_ordered_timestamps(tmp_path) -> None:
+    log_path = configure_session_logging(tmp_path, session_id="trace-1")
+    assert log_path is not None
+    try:
+        with session() as (runtime, adapter, clock, tracker):
+            activate(runtime, 100)
+            generation = runtime.machine.generation
+
+            tracker.observations = (rotated_observation(0.0),)
+            assert runtime.process_frame(frame(200, 1)) is None
+            tracker.observations = (rotated_observation(30.0),)
+            assert runtime.process_frame(frame(300, 2)) is not None
+
+            runtime.tick(at(clock, 400))
+            wait_for(
+                lambda: runtime.worker is not None
+                and runtime.worker.stats().delivered == 1,
+                "the traced navigation to reach the adapter",
+            )
+            assert adapter.executed == [Navigate(SlideDirection.NEXT)]
+    finally:
+        close_session_logging()
+
+    records = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert {record["session"] for record in records} == {"trace-1"}
+
+    traced = [
+        record
+        for record in records
+        if record.get("generation") == generation
+        and (
+            record.get("action") == GestureAction.NEXT_SLIDE.value
+            or record.get("command") == "Navigate"
+        )
+    ]
+    assert [record["event"] for record in traced] == [
+        "gesture",
+        "state",
+        "dispatch",
+        "adapter",
+    ]
+    assert [record["ts_ns"] for record in traced] == sorted(
+        record["ts_ns"] for record in traced
+    )
+    assert [record["timestamp_ns"] for record in traced] == sorted(
+        record["timestamp_ns"] for record in traced
+    )
+    assert traced[2]["sequence"] == traced[3]["sequence"]
+    assert traced[3]["status"] == "delivered"

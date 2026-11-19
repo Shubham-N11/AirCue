@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
+from aircue.diagnostics.session_log import record_event
 from aircue.presentation.adapter import (
     AdapterError,
     AdapterResult,
@@ -161,6 +162,13 @@ class CommandWorker:
                 "forced abandonment of the daemon thread",
                 timeout_s,
             )
+            record_event(
+                "fault",
+                generation=self._current_generation(),
+                level=logging.ERROR,
+                reason="command worker did not stop",
+                timeout_s=timeout_s,
+            )
             return False
         return True
 
@@ -179,27 +187,37 @@ class CommandWorker:
                 return False
             envelope = self._envelope(payload, generation, target, now)
             tail = self._queue[-1] if self._queue else None
-            if (
+            coalesced = (
                 tail is not None
                 and isinstance(tail.payload, PointerMove)
                 and isinstance(payload, PointerMove)
-            ):
+            )
+            if coalesced:
                 self._queue[-1] = envelope
                 self._stats = replace(
                     self._stats,
                     submitted=self._stats.submitted + 1,
                     coalesced=self._stats.coalesced + 1,
                 )
-                return True
-            if len(self._queue) >= self._queue_size:
+            elif len(self._queue) >= self._queue_size:
                 self._stats = replace(
                     self._stats, rejected_full=self._stats.rejected_full + 1
                 )
                 return False
-            self._queue.append(envelope)
-            self._stats = replace(self._stats, submitted=self._stats.submitted + 1)
-            self._condition.notify()
-            return True
+            else:
+                self._queue.append(envelope)
+                self._stats = replace(self._stats, submitted=self._stats.submitted + 1)
+                self._condition.notify()
+        record_event(
+            "dispatch",
+            generation=envelope.generation,
+            sequence=envelope.sequence,
+            command=type(payload).__name__,
+            coalesced=coalesced,
+            timestamp_ns=envelope.enqueued_ns,
+            expires_ns=envelope.expires_ns,
+        )
+        return True
 
     def check_unresponsive(self, now_ns: int | None = None) -> bool:
         """True once a call has gone unacknowledged past the threshold.
@@ -218,6 +236,14 @@ class CommandWorker:
                 logger.error(
                     "adapter call exceeded %d ms without acknowledgement; dispatch will stop",
                     self._unresponsive_ns // 1_000_000,
+                )
+                record_event(
+                    "fault",
+                    generation=self._current_generation(),
+                    level=logging.ERROR,
+                    reason="adapter unresponsive",
+                    threshold_ms=self._unresponsive_ns // 1_000_000,
+                    timestamp_ns=now,
                 )
                 return True
             return False
@@ -397,3 +423,14 @@ class CommandWorker:
             elif status is DispatchStatus.TIMEOUT:
                 stats = replace(stats, timeouts=stats.timeouts + 1)
             self._stats = stats
+        record_event(
+            "adapter",
+            generation=envelope.generation,
+            sequence=envelope.sequence,
+            command=type(envelope.payload).__name__,
+            status=status.value,
+            error=None if error is None else error.value,
+            detail=detail,
+            elapsed_ns=elapsed_ns,
+            timestamp_ns=self._clock_ns(),
+        )

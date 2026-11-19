@@ -37,6 +37,12 @@ def config_file(tmp_path):
     return str(path)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_session_log(monkeypatch):
+    monkeypatch.setattr("aircue.app.cli.configure_session_logging", lambda **kwargs: None)
+    monkeypatch.setattr("aircue.app.cli.close_session_logging", lambda: None)
+
+
 def test_help_lists_every_subcommand(capsys) -> None:
     with pytest.raises(SystemExit) as exc:
         main(["--help"])
@@ -71,6 +77,18 @@ def test_a_successful_start_reports_ready(monkeypatch, config_file, capsys) -> N
     monkeypatch.setattr("aircue.app.cli.AirCueRuntime", FakeRuntime)
     assert main(["run", "--config", config_file]) == EXIT_OK
     assert "state=idle" in capsys.readouterr().out
+
+
+def test_a_successful_start_configures_session_logging(
+    monkeypatch, config_file
+) -> None:
+    calls = []
+    monkeypatch.setattr("aircue.app.cli.AirCueRuntime", FakeRuntime)
+    monkeypatch.setattr(
+        "aircue.app.cli.configure_session_logging", lambda **kwargs: calls.append(kwargs)
+    )
+    assert main(["run", "--config", config_file]) == EXIT_OK
+    assert calls == [{"level": "INFO"}]
 
 
 def test_a_failed_start_reports_the_failing_component(

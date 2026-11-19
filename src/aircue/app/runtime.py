@@ -26,6 +26,7 @@ from aircue.commands.pointer import (
 )
 from aircue.commands.scroll import ScrollController
 from aircue.config.schema import Config
+from aircue.diagnostics.session_log import record_event
 from aircue.dispatch.errors import apply_error
 from aircue.dispatch.worker import CommandWorker
 from aircue.gestures.classifiers import is_pointer_pose
@@ -371,6 +372,16 @@ class AirCueRuntime:
             sequence=frame.sequence,
         )
         if event is not None:
+            record_event(
+                "gesture",
+                generation=self.machine.generation,
+                action=event.action.value,
+                gesture=event.gesture.value,
+                confidence=event.confidence,
+                onset_ns=event.onset_ns,
+                timestamp_ns=event.timestamp_ns,
+                sequence=frame.sequence,
+            )
             try:
                 self.events.put_nowait(event)
             except queue.Full:
@@ -382,6 +393,13 @@ class AirCueRuntime:
         """Apply one semantic event on the state thread, revalidating its target."""
         action = event.action
         timestamp_ns = event.timestamp_ns
+        record_event(
+            "state",
+            generation=self.machine.generation,
+            state=self.state.value,
+            action=action.value,
+            timestamp_ns=timestamp_ns,
+        )
 
         if action is GestureAction.EXIT_REQUEST:
             return self._transition(
@@ -626,6 +644,15 @@ class AirCueRuntime:
             record = apply_error(
                 self.machine, outcome.error, now_ns, detail=outcome.detail
             )
+            if record is not None and record.accepted:
+                record_event(
+                    "fault",
+                    generation=record.generation,
+                    level=logging.ERROR,
+                    reason=outcome.error.value,
+                    detail=outcome.detail,
+                    timestamp_ns=now_ns,
+                )
             self._after_transition(record)
         if self.worker.check_unresponsive(now_ns):
             self._transition(
@@ -680,6 +707,14 @@ class AirCueRuntime:
         self, trigger: TransitionTrigger, timestamp_ns: int, detail: str
     ) -> TransitionRecord:
         record = self.recovery.fault(trigger, timestamp_ns, reason=detail)
+        record_event(
+            "fault",
+            generation=record.generation,
+            level=logging.ERROR,
+            reason=detail,
+            trigger=trigger.value,
+            timestamp_ns=timestamp_ns,
+        )
         self._after_transition(record)
         return record
 
@@ -706,8 +741,17 @@ class AirCueRuntime:
     def _after_transition(self, record: TransitionRecord | None) -> None:
         if record is None:
             return
+        record_event(
+            "state",
+            generation=record.generation,
+            accepted=record.accepted,
+            previous=record.previous.value,
+            trigger=record.trigger.value,
+            resulting=record.resulting.value,
+            reason=record.reason,
+            timestamp_ns=record.timestamp_ns,
+        )
         if not record.accepted:
-            logger.info("transition rejected: %s", record.reason)
             return
         self.feedback.transition(record)
         if record.resulting is not InteractionState.POINTER_MODE:
@@ -763,12 +807,26 @@ class AirCueRuntime:
     def _record_capture_error(self, error: CaptureError) -> None:
         detail = str(error)
         if detail != self._capture_error:
-            logger.warning("camera read failed: %s", detail)
+            record_event(
+                "fault",
+                generation=self.machine.generation,
+                level=logging.WARNING,
+                reason="camera read failed",
+                detail=detail,
+                timestamp_ns=self.clock_ns(),
+            )
         self._capture_error = detail
 
     def _record_vision_error(self, detail: str) -> None:
         if self._vision_error is None:
-            logger.error("vision pipeline failed: %s", detail)
+            record_event(
+                "fault",
+                generation=self.machine.generation,
+                level=logging.ERROR,
+                reason="vision pipeline failed",
+                detail=detail,
+                timestamp_ns=self.clock_ns(),
+            )
         self._vision_error = detail
 
     def _capture_mode(self) -> CaptureMode:
@@ -784,6 +842,13 @@ class AirCueRuntime:
             TransitionTrigger.INITIALIZATION_FAILED,
             timestamp_ns,
             reason=f"{component.value}: {detail}",
+        )
+        record_event(
+            "fault",
+            generation=record.generation,
+            level=logging.ERROR,
+            reason=f"{component.value}: {detail}",
+            timestamp_ns=timestamp_ns,
         )
         self.feedback.transition(record)
         return record

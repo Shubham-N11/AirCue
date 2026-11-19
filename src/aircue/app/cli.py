@@ -8,6 +8,7 @@ import time
 
 from aircue.app.runtime import AirCueRuntime
 from aircue.config.loader import ConfigError, load_config
+from aircue.diagnostics.session_log import close_session_logging, configure_session_logging
 from aircue.presentation.classify import classify_target
 from aircue.presentation.discovery import DiscoveryResult, PowerPointDiscovery
 from aircue.presentation.win32 import CtypesWin32
@@ -62,6 +63,7 @@ def _run(config_path: str | None) -> int:
     except ConfigError as exc:
         return _config_failure(exc)
 
+    configure_session_logging(level=config.diagnostics.log_level)
     overlay = (
         Win32StatusOverlay(opacity=config.ui.overlay_opacity)
         if config.ui.overlay_enabled
@@ -80,6 +82,7 @@ def _run(config_path: str | None) -> int:
         runtime.close()
         if overlay is not None:
             overlay.close()
+        close_session_logging()
 
 
 def _benchmark(args: argparse.Namespace) -> int:
