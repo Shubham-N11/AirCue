@@ -33,6 +33,7 @@ from aircue.gestures.classifiers import is_pointer_pose
 from aircue.gestures.recognizer import GestureRecognizer
 from aircue.gestures.semantic import GestureAction, SemanticEvent
 from aircue.gestures.vocabulary import Gesture
+from aircue.hardware.selection import HardwareSelection, select_hardware
 from aircue.performance.metrics import MetricsRecorder
 from aircue.performance.timing import FrameTimings, Stage, measure
 from aircue.presentation.adapter import (
@@ -154,6 +155,7 @@ class AirCueRuntime:
         tracker: HandTracker | None = None,
         adapter: PresentationAdapter | None = None,
         indicator: StatusIndicator | None = None,
+        selection: HardwareSelection | None = None,
         clock_ns: Callable[[], int] = time.monotonic_ns,
         key_down: Callable[[int], bool] | None = None,
         instrument: bool = True,
@@ -162,6 +164,7 @@ class AirCueRuntime:
         self.clock_ns = clock_ns
         self.instrument = instrument
         self.metrics = MetricsRecorder(clock_ns=clock_ns)
+        self.hardware = selection or select_hardware(config.hardware)
         self.machine = StateMachine()
         self.feedback = StatusFeedback(indicator or _SilentIndicator())
         self.manager = CommandManager()
@@ -233,6 +236,7 @@ class AirCueRuntime:
     def initialize(self) -> TransitionRecord:
         """Open the camera and load the tracker; error out with the failing component."""
         now = self.clock_ns()
+        self.tracker = self._tracker
         try:
             self.source = self._source or OpenCvCameraSource(self.config.camera.device_index)
             self.source.open(self._capture_mode())
@@ -242,11 +246,12 @@ class AirCueRuntime:
             return self._fail(StartupComponent.CAMERA, str(exc), now)
 
         try:
-            self.tracker = self._tracker or MediaPipeHandTracker(
-                self.config.vision.model_path,
-                confidence_threshold=self.config.vision.confidence_threshold,
-                max_hands=self.config.vision.max_hands,
-            )
+            if self.tracker is None:
+                self.tracker = MediaPipeHandTracker(
+                    self.config.vision.model_path,
+                    confidence_threshold=self.config.vision.confidence_threshold,
+                    max_hands=self.config.vision.max_hands,
+                )
         except TrackerError as exc:
             return self._fail(StartupComponent.TRACKER, str(exc), now)
         except Exception as exc:
@@ -281,6 +286,19 @@ class AirCueRuntime:
             reason="camera, tracker, and adapter ready",
         )
         self.feedback.transition(record)
+        record_event(
+            "hardware",
+            generation=record.generation,
+            hint=self.hardware.hint.tier.value,
+            profile=self.hardware.profile.value,
+            profile_source=self.hardware.profile_source,
+            backend=self.hardware.backend,
+            processing_fps=self.hardware.processing_fps,
+            capture=f"{self.hardware.tier.width}x{self.hardware.tier.height}",
+            benchmark_result=self.hardware.benchmark_result,
+            benchmark_margin_percent=self.hardware.benchmark_margin_percent,
+            overrides=list(self.hardware.overrides),
+        )
         return record
 
     def run(self, stop: threading.Event | None = None) -> None:
@@ -1032,8 +1050,7 @@ class AirCueRuntime:
         self._vision_error = detail
 
     def _capture_mode(self) -> CaptureMode:
-        tier = self.config.hardware.tier2
-        return CaptureMode(tier.width, tier.height, tier.max_fps)
+        return self.hardware.capture_mode()
 
     def _fail(
         self, component: StartupComponent, detail: str, timestamp_ns: int

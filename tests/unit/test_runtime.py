@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from aircue.app.runtime import AirCueRuntime, StartupComponent
 from aircue.capture.types import (
     CaptureError,
@@ -96,7 +98,7 @@ def test_a_camera_failure_reaches_error_and_names_the_component() -> None:
     assert record.reason.startswith("camera: ")
     assert "no supported camera mode" in record.reason
     assert source.closed is True
-    assert tracker.closed is False
+    assert tracker.closed is True
 
 
 def test_a_tracker_failure_reaches_error_and_names_the_component() -> None:
@@ -151,3 +153,39 @@ def test_the_capture_request_follows_the_tier2_profile() -> None:
     runtime.initialize()
 
     assert source.requested == CaptureMode(960, 540, 25.0)
+
+
+@pytest.mark.parametrize(
+    ("profile", "expected"),
+    [
+        ("tier1", CaptureMode(640, 360, 15.0)),
+        ("tier2", CaptureMode(1280, 720, 30.0)),
+        ("tier3", CaptureMode(1280, 720, 60.0)),
+    ],
+)
+def test_profile_changes_alter_the_capture_request_without_another_code_path(
+    profile: str, expected: CaptureMode
+) -> None:
+    config = Config()
+    config = replace(config, hardware=replace(config.hardware, profile=profile))
+    source = FakeSource()
+    runtime = AirCueRuntime(
+        config, source=source, tracker=FakeTracker(), adapter=FakeAdapter()
+    )
+
+    runtime.initialize()
+
+    assert source.requested == expected
+
+
+def test_a_forced_frequency_reaches_the_capture_request() -> None:
+    config = Config()
+    config = replace(config, hardware=replace(config.hardware, processing_fps=24.0))
+    source = FakeSource()
+    runtime = AirCueRuntime(
+        config, source=source, tracker=FakeTracker(), adapter=FakeAdapter()
+    )
+
+    runtime.initialize()
+
+    assert source.requested == CaptureMode(1280, 720, 24.0)

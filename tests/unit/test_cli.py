@@ -14,9 +14,11 @@ class FakeRuntime:
     state = InteractionState.IDLE
     record = SimpleNamespace(accepted=True, reason="ready")
 
-    def __init__(self, config, indicator=None) -> None:
+    def __init__(self, config, indicator=None, tracker=None, selection=None) -> None:
         self.config = config
         self.indicator = indicator
+        self.tracker = tracker
+        self.selection = selection
         self.closed = False
         self.ran = False
 
@@ -76,7 +78,24 @@ def test_invalid_configuration_is_reported_as_a_config_failure(tmp_path, capsys)
 def test_a_successful_start_reports_ready(monkeypatch, config_file, capsys) -> None:
     monkeypatch.setattr("aircue.app.cli.AirCueRuntime", FakeRuntime)
     assert main(["run", "--config", config_file]) == EXIT_OK
-    assert "state=idle" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "state=idle" in output
+    assert "hardware hint=" in output
+    assert "backend=cpu" in output
+    assert "benchmark: result=not_run" in output
+
+
+def test_a_forced_profile_is_reported_as_an_override(monkeypatch, tmp_path, capsys) -> None:
+    path = tmp_path / "config.json"
+    path.write_text('{"hardware": {"profile": "tier1"}}', encoding="utf-8")
+    monkeypatch.setattr("aircue.app.cli.AirCueRuntime", FakeRuntime)
+
+    assert main(["run", "--config", str(path)]) == EXIT_OK
+
+    output = capsys.readouterr().out
+    assert "profile=tier1" in output
+    assert "source=forced" in output
+    assert "override: profile=tier1" in output
 
 
 def test_a_successful_start_configures_session_logging(
@@ -199,3 +218,28 @@ def test_diagnose_lists_candidates_and_the_classified_target(capsys) -> None:
     assert "foreground=True" in output
     assert "monitor=ScreenRect(left=0, top=0, right=1920, bottom=1080)" in output
     assert "target=normal_slideshow" in output
+
+
+def test_diagnose_reports_the_hardware_selection(capsys) -> None:
+    from aircue.app.cli import _diagnose
+    from aircue.config.schema import Config
+    from aircue.hardware import HardwareEvidence, select_hardware
+
+    selection = select_hardware(
+        Config().hardware,
+        evidence=HardwareEvidence(
+            cpu_name="Example CPU",
+            physical_cores=8,
+            logical_cores=16,
+            ram_gb=32.0,
+            gpu_adapters=("Example GPU",),
+        ),
+        benchmark_result="cpu_selected",
+    )
+
+    assert _diagnose(DiscoveryResult((), ()), selection=selection) == EXIT_OK
+    output = capsys.readouterr().out
+    assert "hardware hint=tier3" in output
+    assert "profile=tier3" in output
+    assert "backend=cpu" in output
+    assert "benchmark: result=cpu_selected margin=n/a" in output
