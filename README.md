@@ -20,6 +20,9 @@ is recorded in the project's validation reports.
 - A standard webcam
 - Microsoft PowerPoint (2019, 2021, or Microsoft 365) for presentation control
 
+v1 is CPU-only. A GPU backend is optional and not currently supported; see
+[`docs/backend-decision.md`](docs/backend-decision.md).
+
 ## Quickstart
 
 From a checkout of this repository:

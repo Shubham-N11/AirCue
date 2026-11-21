@@ -194,7 +194,8 @@ real until controlled Tier 1 measurement exists.
   dependency range is `>=0.10.30,<1.0`.
 - Model redistribution terms are unverified. Do not bundle the model until that
   review is complete.
-- No GPU path has been validated. Backend selection is a Phase 8 gate.
+- No GPU path has been validated; v1 is CPU-only, as recorded in
+  [`docs/backend-decision.md`](backend-decision.md).
 - The tracker passes the captured frame as-is. Camera candidates preserve the
   requested aspect ratio except the 320x240 floor; detection quality at that floor is
   unverified. The spike harness letterboxes only its still image.
