@@ -127,7 +127,9 @@ digit, or named key (`space`, `tab`, `enter`, `esc`).
 `aircue run` reports `startup failed: camera: ...` when the camera cannot be
 opened. Close applications that may hold the camera (Teams, Zoom, Camera), then
 retry. If the wrong camera is selected, set `camera.device_index`. During a
-session, a missing camera frame for 2 s moves AirCue to `ERROR` and stops input;
+session, a missing camera frame for 2 s moves AirCue to `ERROR` and stops input.
+AirCue then makes three reconnect attempts with 500 ms backoff. If one succeeds,
+it returns to `IDLE` and still requires deliberate activation; if all three fail,
 fix the camera and restart AirCue.
 
 ### Permissions

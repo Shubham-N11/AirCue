@@ -146,13 +146,14 @@ def session(
     kind: TargetKind = TargetKind.NORMAL_SLIDESHOW,
     observations: tuple[HandObservation, ...] = (),
     keys: set[int] | None = None,
+    config: Config | None = None,
 ) -> Iterator[tuple[AirCueRuntime, FakeAdapter, Clock, FakeTracker]]:
     clock = Clock()
     adapter = FakeAdapter(kind)
     tracker = FakeTracker(observations)
     down = keys if keys is not None else set()
     runtime = AirCueRuntime(
-        Config(),
+        config or Config(),
         source=FakeSource(),
         tracker=tracker,
         adapter=adapter,

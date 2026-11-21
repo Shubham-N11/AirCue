@@ -260,6 +260,8 @@ class AirCueRuntime:
         self._last_capture_count = 0
         self._last_capture_ns: int | None = None
         self._last_target_kind: TargetKind | None = None
+        self._reconnect_thread: threading.Thread | None = None
+        self._reconnect_succeeded = False
 
     @property
     def state(self) -> InteractionState:
@@ -393,6 +395,21 @@ class AirCueRuntime:
             self.worker.stop()
             self.worker = None
 
+        reconnect = self._reconnect_thread
+        self._reconnect_thread = None
+        reconnect_alive = False
+        if reconnect is not None:
+            reconnect.join(_JOIN_TIMEOUT_S)
+            reconnect_alive = reconnect.is_alive()
+            if reconnect_alive:
+                record_event(
+                    "fault",
+                    generation=self.machine.generation,
+                    level=logging.ERROR,
+                    reason="camera reconnect thread did not stop",
+                    timeout_s=_JOIN_TIMEOUT_S,
+                )
+
         capture = self._capture
         self._capture = None
         if capture is not None and not capture.stop():
@@ -425,8 +442,13 @@ class AirCueRuntime:
                 self.tracker.close()
             self.tracker = None
         if self.source is not None:
-            self.source.close()
-            self.source = None
+            if reconnect_alive:
+                # The reconnect worker still owns the source; it closes it
+                # after observing the stop event.
+                self.source = None
+            else:
+                self.source.close()
+                self.source = None
 
     def process_frame(self, frame: Frame) -> SemanticEvent | None:
         """Run one captured frame through tracking, features, and recognition."""
@@ -577,6 +599,7 @@ class AirCueRuntime:
         """One state-thread iteration: faults, outcomes, events, samples, timers."""
         now = self.clock_ns() if now_ns is None else now_ns
         self._apply_pending_faults(now)
+        self._apply_camera_reconnect(now)
         self._poll_hotkeys(now)
         self._drain_outcomes(now)
         self._drain_events()
@@ -1028,6 +1051,8 @@ class AirCueRuntime:
         capture = self._capture
         if capture is None:
             return
+        if self.state is InteractionState.ERROR:
+            return
         count = capture.frames_captured
         if count != self._last_capture_count:
             self._last_capture_count = count
@@ -1045,6 +1070,94 @@ class AirCueRuntime:
             now_ns,
             self._capture_error or "no camera frame within the freeze window",
         )
+
+    def _start_camera_reconnect(self) -> None:
+        if self.source is None or self.recovery.reconnect_attempts_left <= 0:
+            return
+        thread = self._reconnect_thread
+        if thread is not None and thread.is_alive():
+            return
+        self._reconnect_succeeded = False
+        self._reconnect_thread = threading.Thread(
+            target=self._camera_reconnect_loop,
+            name="aircue-camera-reconnect",
+            daemon=True,
+        )
+        self._reconnect_thread.start()
+
+    def _camera_reconnect_loop(self) -> None:
+        source = self.source
+        capture = self._capture
+        if capture is not None:
+            capture.stop()
+        if source is None:
+            return
+        source.close()
+        backoff_s = self.recovery.reconnect_backoff_ns / 1_000_000_000
+        attempt = 0
+        while (
+            self.recovery.reconnect_attempts_left > 0
+            and not self._stop_event.is_set()
+        ):
+            attempt += 1
+            if backoff_s > 0 and self._stop_event.wait(backoff_s):
+                return
+            if self._stop_event.is_set():
+                return
+            try:
+                source.open(self._capture_mode())
+            except Exception as exc:
+                left = self.recovery.camera_attempt_failed()
+                record_event(
+                    "recovery",
+                    generation=self.machine.generation,
+                    level=logging.WARNING,
+                    reason="camera reconnect attempt failed",
+                    attempt=attempt,
+                    attempts_left=left,
+                    detail=str(exc),
+                    timestamp_ns=self.clock_ns(),
+                )
+                continue
+            if self._stop_event.is_set():
+                source.close()
+                return
+            replacement = CaptureThread(
+                source,
+                self.frames,
+                on_error=self._record_capture_error,
+                instrument=self.instrument,
+            )
+            replacement.start()
+            self._capture = replacement
+            self._reconnect_succeeded = True
+            record_event(
+                "recovery",
+                generation=self.machine.generation,
+                reason="camera reconnect succeeded",
+                attempt=attempt,
+                timestamp_ns=self.clock_ns(),
+            )
+            return
+
+    def _apply_camera_reconnect(self, now_ns: int) -> None:
+        if not self._reconnect_succeeded:
+            return
+        self._reconnect_succeeded = False
+        if self.state is not InteractionState.ERROR:
+            return
+        record = self.recovery.camera_reconnected(
+            now_ns, reason="camera reconnected"
+        )
+        self._after_transition(record)
+        if not record.accepted:
+            return
+        capture = self._capture
+        self._last_capture_ns = now_ns
+        self._last_capture_count = (
+            0 if capture is None else capture.frames_captured
+        )
+        self._capture_error = ""
 
     def _update_target(self, now_ns: int) -> None:
         if self.adapter is None:
@@ -1072,6 +1185,8 @@ class AirCueRuntime:
             timestamp_ns=timestamp_ns,
         )
         self._after_transition(record)
+        if trigger is TransitionTrigger.CAMERA_FAULT and record.accepted:
+            self._start_camera_reconnect()
         return record
 
     def _vision_fault_trigger(self) -> TransitionTrigger:

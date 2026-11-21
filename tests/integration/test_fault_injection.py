@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 import math
+import time
 from dataclasses import replace
 
+import numpy as np
 import pytest
 
 from aircue.app.runtime import AirCueRuntime
+from aircue.capture.mailbox import CaptureThread
+from aircue.capture.types import (
+    CaptureFailureError,
+    CaptureOpenResult,
+    CaptureUnavailableError,
+    Frame,
+)
 from aircue.config.schema import Config
 from aircue.gestures.semantic import GestureAction
 from aircue.gestures.vocabulary import Gesture
@@ -19,6 +29,7 @@ from tests.fixtures.landmarks import make_observation
 from tests.integration.test_runtime_session import (
     BlockingAdapter,
     Clock,
+    FakeAdapter,
     FakeSource,
     FakeTracker,
     activate,
@@ -42,8 +53,158 @@ class FrozenCapture:
         return True
 
 
+class ReconnectSource(FakeSource):
+    """A fake camera that stops producing frames until it is reopened."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.down = False
+        self.reopen_ok = True
+        self.opens = 0
+        self.sequence = 0
+
+    def open(self, mode) -> CaptureOpenResult:
+        self.opens += 1
+        if self.opens > 1 and not self.reopen_ok:
+            raise CaptureUnavailableError("camera is still unavailable")
+        self.down = False
+        return super().open(mode)
+
+    def read(self) -> Frame:
+        if self.down:
+            time.sleep(0.005)
+            raise CaptureFailureError("camera lost")
+        self.sequence += 1
+        return Frame(
+            np.zeros((2, 2, 3), np.uint8), time.monotonic_ns(), self.sequence
+        )
+
+
+def start_camera_session(
+    source: ReconnectSource,
+) -> tuple[AirCueRuntime, FakeAdapter, Clock, CaptureThread]:
+    config = replace(
+        Config(),
+        camera=replace(
+            Config().camera, reconnect_attempts=3, reconnect_backoff_ms=0
+        ),
+    )
+    clock = Clock()
+    adapter = FakeAdapter()
+    runtime = AirCueRuntime(
+        config,
+        source=source,
+        tracker=FakeTracker(),
+        adapter=adapter,
+        clock_ns=clock,
+        key_down=lambda _key: False,
+    )
+    assert runtime.initialize().accepted is True
+    capture = CaptureThread(
+        source, runtime.frames, on_error=runtime._record_capture_error
+    )
+    runtime._capture = capture
+    capture.start()
+    wait_for(lambda: capture.frames_captured > 0, "the first captured frame")
+    activate(runtime, 100)
+    return runtime, adapter, clock, capture
+
+
+def lose_camera(runtime: AirCueRuntime, clock: Clock) -> None:
+    runtime.tick(200_000_000)
+    runtime.tick(2_200_000_000)
+    assert runtime.state is S.ACTIVE
+    runtime.tick(2_200_000_001)
+    assert runtime.state is S.ERROR
+    clock.now = 2_200_000_001
+
+
+def pump_until(runtime: AirCueRuntime, clock: Clock, predicate, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        clock.now += 10_000_000
+        runtime.tick()
+        if predicate():
+            return
+        time.sleep(0.002)
+    raise AssertionError("timed out pumping the runtime")
+
+
+def test_a_camera_freeze_reconnects_and_returns_to_idle(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    source = ReconnectSource()
+    runtime, adapter, clock, _capture = start_camera_session(source)
+    try:
+        source.down = True
+        time.sleep(0.02)
+        lose_camera(runtime, clock)
+
+        with caplog.at_level(logging.INFO, logger="aircue.session"):
+            pump_until(runtime, clock, lambda: runtime.state is S.IDLE)
+
+        assert runtime.state is S.IDLE
+        assert runtime.recovery.error_cause is None
+        assert source.opens == 2
+        assert any(
+            getattr(record, "fields", {}).get("reason")
+            == "camera reconnect succeeded"
+            for record in caplog.records
+        )
+
+        runtime.handle_event(
+            event(GestureAction.NEXT_SLIDE, 4_000, Gesture.OPEN_PALM_CLOCKWISE)
+        )
+        runtime.tick(4_000_000_000)
+        assert runtime.state is S.IDLE
+        assert adapter.executed == []
+    finally:
+        runtime.close()
+
+
+def test_exhausted_camera_reconnects_leave_error_and_exit_works(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    source = ReconnectSource()
+    source.reopen_ok = False
+    runtime, _adapter, clock, _capture = start_camera_session(source)
+    try:
+        source.down = True
+        time.sleep(0.02)
+        lose_camera(runtime, clock)
+
+        with caplog.at_level(logging.WARNING, logger="aircue.session"):
+            wait_for(
+                lambda: runtime.recovery.reconnect_attempts_left == 0,
+                "three failed reconnect attempts",
+            )
+
+        assert runtime.state is S.ERROR
+        attempts = [
+            getattr(record, "fields", {})
+            for record in caplog.records
+            if getattr(record, "fields", {}).get("reason")
+            == "camera reconnect attempt failed"
+        ]
+        assert [fields["attempt"] for fields in attempts] == [1, 2, 3]
+        assert [fields["attempts_left"] for fields in attempts] == [2, 1, 0]
+        assert source.opens == 4
+
+        record = runtime.request_exit()
+        assert record.accepted is True
+        assert runtime.state is S.EXITING
+        runtime.shutdown()
+        assert runtime.machine.terminated is True
+    finally:
+        runtime.close()
+
+
 def test_camera_loss_enters_error_and_stops_output() -> None:
-    with session() as (runtime, adapter, _clock, _tracker):
+    config = replace(
+        Config(),
+        camera=replace(Config().camera, reconnect_attempts=0),
+    )
+    with session(config=config) as (runtime, adapter, _clock, _tracker):
         activate(runtime, 100)
         # The runtime's camera watchdog is the fault injector; no real camera
         # is opened, so stand in for the capture thread's frame counter.
@@ -57,10 +218,6 @@ def test_camera_loss_enters_error_and_stops_output() -> None:
 
         assert runtime.state is S.ERROR
         assert runtime.recovery.error_cause is TransitionTrigger.CAMERA_FAULT
-        assert (
-            runtime.recovery.reconnect_attempts_left
-            == runtime.config.camera.reconnect_attempts
-        )
 
         runtime.handle_event(
             event(GestureAction.NEXT_SLIDE, 2_300, Gesture.OPEN_PALM_CLOCKWISE)
