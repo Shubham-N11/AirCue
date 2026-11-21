@@ -10,6 +10,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+from aircue.app.hotkeys import VK_CONTROL, VK_MENU
 from aircue.app.runtime import AirCueRuntime
 from aircue.capture.mailbox import CaptureThread
 from aircue.capture.types import (
@@ -400,6 +401,41 @@ def test_powerpoint_exit_pauses_and_sends_no_further_input() -> None:
         )
         runtime.tick(400_000_000)
         assert adapter.executed == [Navigate(SlideDirection.NEXT)]
+
+
+def test_the_exit_hotkey_stays_responsive_while_the_adapter_hangs() -> None:
+    clock = Clock()
+    adapter = BlockingAdapter()
+    keys = {VK_CONTROL, VK_MENU}
+    runtime = AirCueRuntime(
+        Config(),
+        source=FakeSource(),
+        tracker=FakeTracker(),
+        adapter=adapter,
+        clock_ns=clock,
+        key_down=keys.__contains__,
+    )
+    assert runtime.initialize().accepted is True
+    assert runtime.worker is not None
+    runtime.worker.start()
+    try:
+        activate(runtime, 100)
+        clock.now = 200_000_000
+        runtime.handle_event(
+            event(GestureAction.NEXT_SLIDE, 200, Gesture.OPEN_PALM_CLOCKWISE)
+        )
+        assert adapter.started.wait(2.0)
+
+        keys.add(ord("Q"))
+        clock.now = 250_000_000
+        started = time.monotonic()
+        runtime.tick()
+
+        assert time.monotonic() - started < 0.5
+        assert runtime.state is S.EXITING
+    finally:
+        adapter.gate.set()
+        runtime.close()
 
 
 def test_a_rejected_command_sends_no_input_and_keeps_the_state() -> None:
