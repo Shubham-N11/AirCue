@@ -120,6 +120,14 @@ The defaults used most often:
 Hotkey strings use `ctrl`, `alt`, `shift`, and `win` modifiers plus one letter,
 digit, or named key (`space`, `tab`, `enter`, `esc`).
 
+Debug capture is off by default. When enabled, AirCue writes at most one JPEG
+per second to the configured directory and records the opt-in in the session
+log. A write failure disables capture and is logged; the session continues.
+
+```json
+{ "diagnostics": { "debug_capture": true, "debug_capture_dir": "C:\\path\\to\\frames" } }
+```
+
 ## Troubleshooting
 
 ### Camera

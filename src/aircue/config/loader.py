@@ -125,3 +125,9 @@ def _validate_cross_fields(config: Config, source: str) -> None:
             parse_hotkey(getattr(config.hotkeys, name))
         except ValueError as exc:
             raise ConfigError(f"{source}: hotkeys.{name}: {exc}") from exc
+    diagnostics = config.diagnostics
+    if diagnostics.debug_capture and not diagnostics.debug_capture_dir.strip():
+        raise ConfigError(
+            f"{source}: diagnostics.debug_capture_dir must be set when "
+            "debug_capture is enabled"
+        )

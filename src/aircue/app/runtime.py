@@ -26,6 +26,7 @@ from aircue.commands.pointer import (
 )
 from aircue.commands.scroll import ScrollController
 from aircue.config.schema import Config
+from aircue.diagnostics.debug_capture import DebugFrameStore
 from aircue.diagnostics.session_log import record_event
 from aircue.dispatch.errors import apply_error
 from aircue.dispatch.worker import CommandWorker, DispatchOutcome, DispatchStatus
@@ -262,6 +263,8 @@ class AirCueRuntime:
         self._last_target_kind: TargetKind | None = None
         self._reconnect_thread: threading.Thread | None = None
         self._reconnect_succeeded = False
+        self.debug_store: DebugFrameStore | None = None
+        self._debug_error: str | None = None
 
     @property
     def state(self) -> InteractionState:
@@ -333,6 +336,24 @@ class AirCueRuntime:
             benchmark_margin_percent=self.hardware.benchmark_margin_percent,
             overrides=list(self.hardware.overrides),
         )
+        diagnostics = self.config.diagnostics
+        if diagnostics.debug_capture and diagnostics.debug_capture_dir.strip():
+            self.debug_store = DebugFrameStore(diagnostics.debug_capture_dir)
+            record_event(
+                "privacy",
+                generation=record.generation,
+                reason="debug capture opted in",
+                directory=diagnostics.debug_capture_dir,
+                interval_ms=1000,
+            )
+        elif diagnostics.debug_capture:
+            record_event(
+                "fault",
+                generation=record.generation,
+                level=logging.WARNING,
+                reason="debug capture disabled",
+                detail="debug_capture_dir is not configured",
+            )
         return record
 
     def run(self, stop: threading.Event | None = None) -> None:
@@ -457,6 +478,19 @@ class AirCueRuntime:
         timestamp_ns = frame.capture_ts_ns
         if frame.timings is not None:
             frame.timings.capture_ts_ns = timestamp_ns
+        store = self.debug_store
+        if store is not None:
+            error = store.write(frame, timestamp_ns)
+            if error is not None and self._debug_error is None:
+                self._debug_error = error
+                record_event(
+                    "fault",
+                    generation=self.machine.generation,
+                    level=logging.WARNING,
+                    reason="debug capture disabled",
+                    detail=error,
+                    timestamp_ns=timestamp_ns,
+                )
         if self.instrument:
             self.metrics.record_frame(timestamp_ns=timestamp_ns)
         try:
