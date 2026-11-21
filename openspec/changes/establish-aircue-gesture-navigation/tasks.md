@@ -99,7 +99,7 @@
 
 ## 9. Reliability and Real-World Validation
 
-- [ ] 9.1 Implement fault-injection tests for camera loss, NaN and invalid landmarks, low confidence, partial occlusion, focus loss, adapter failure, unresponsive adapter, PowerPoint exit, and command rejection; verify each fault stops command output and reaches the state specified in design.md D3.1.
+- [x] 9.1 Implement fault-injection tests for camera loss, NaN and invalid landmarks, low confidence, partial occlusion, focus loss, adapter failure, unresponsive adapter, PowerPoint exit, and command rejection; verify each fault stops command output and reaches the state specified in design.md D3.1.
 - [ ] 9.2 Validate tracking loss and recovery with synthetic sequences and a manual camera session: output freezes immediately, no command is generated from the gap beyond 300 ms, IDLE is reached beyond 1,000 ms, IDLE remains IDLE, and deliberate reactivation is required after recovery. Also verify secondary hands cannot emit commands.
 - [ ] 9.3 Validate camera freeze and reconnection: no frame for 2,000 ms enters ERROR, bounded attempts are recorded, success returns to IDLE with deliberate activation required, and exhaustion leaves ERROR with keyboard exit available.
 - [ ] 9.4 Validate adapter failure and unresponsive behavior: recoverable errors reach PAUSED, unrecoverable errors reach ERROR, a 300 ms unacknowledged call marks the adapter unresponsive, and the keyboard exit path remains responsive during a hang.
