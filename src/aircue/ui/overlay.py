@@ -242,6 +242,8 @@ def format_status(status: StatusModel) -> str:
         lines.append(status.prompt)
     if status.reason:
         lines.append(f"reason: {status.reason}")
+    if status.warning:
+        lines.append(f"warning: {status.warning}")
     return "\n".join(lines)
 
 
@@ -252,7 +254,7 @@ class Win32StatusOverlay:
         self,
         *,
         width: int = 480,
-        height: int = 92,
+        height: int = 112,
         margin: int = 16,
         opacity: float = 0.85,
     ) -> None:

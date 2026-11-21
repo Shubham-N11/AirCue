@@ -157,3 +157,38 @@ def test_port_exposes_only_a_status_update() -> None:
         if not name.startswith("_") and callable(value)
     }
     assert members == {"update"}
+
+
+def test_warning_is_shown_and_cleared_without_changing_state() -> None:
+    subject, indicator = feedback()
+    apply(subject, S.INITIALIZING, T.INITIALIZATION_SUCCEEDED)
+    before = subject.status
+
+    model = subject.warning("resource limit: cpu 91% >= 85%")
+
+    assert model.state is before.state
+    assert model.warning == "resource limit: cpu 91% >= 85%"
+    assert indicator.updates[-1] == model
+
+    cleared = subject.warning(None)
+
+    assert cleared.warning is None
+    assert cleared.state is before.state
+    assert indicator.updates[-1] == cleared
+
+
+def test_transitions_preserve_an_active_warning() -> None:
+    subject, _ = feedback()
+    subject.warning("resource limit: memory")
+    apply(subject, S.INITIALIZING, T.INITIALIZATION_SUCCEEDED)
+
+    assert subject.status.warning == "resource limit: memory"
+
+
+def test_repeating_the_same_warning_does_not_repaint() -> None:
+    subject, indicator = feedback()
+    subject.warning("resource limit: cpu")
+
+    subject.warning("resource limit: cpu")
+
+    assert len(indicator.updates) == 1

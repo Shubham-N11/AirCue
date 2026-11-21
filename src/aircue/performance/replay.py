@@ -186,6 +186,7 @@ def run_replay(
         clock_ns=clock,
         key_down=lambda _key: False,
         instrument=instrument,
+        resource_limits=False,
     )
     try:
         startup = runtime.initialize()

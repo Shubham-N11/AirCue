@@ -138,6 +138,8 @@ class HardwareConfig:
     profile: str = _choice("auto", ("auto", "tier1", "tier2", "tier3"))
     backend: str = _choice("auto", ("auto", "cpu", "gpu"))
     processing_fps: float = _bounded(0.0, minimum=0.0, maximum=240.0)
+    cpu_ceiling_percent: float = _bounded(85.0, minimum=0.0, maximum=100.0)
+    memory_ceiling_mb: int = _bounded(1024, minimum=0)
     tier1: TierConfig = field(default_factory=TierConfig)
     tier2: TierConfig = field(
         default_factory=lambda: TierConfig(

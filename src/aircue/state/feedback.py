@@ -29,6 +29,7 @@ class StatusModel:
     capabilities: TargetCapabilities
     prompt: str | None = None
     reason: str | None = None
+    warning: str | None = None
 
 
 class StatusIndicator(Protocol):
@@ -74,4 +75,11 @@ class StatusFeedback:
             capabilities=capabilities_for(kind),
         )
         self._indicator.update(self._status)
+        return self._status
+
+    def warning(self, message: str | None) -> StatusModel:
+        """Show or clear a resource warning without changing interaction state."""
+        if self._status.warning != message:
+            self._status = replace(self._status, warning=message)
+            self._indicator.update(self._status)
         return self._status

@@ -339,8 +339,16 @@ def test_forced_frequency_is_used_for_the_capture_request() -> None:
     selection = select_hardware(hardware)
 
     assert selection.processing_fps == 24.0
+    assert selection.processing_fps_forced is True
     assert selection.capture_mode().fps == 24.0
     assert "processing_fps=24" in selection.overrides
+
+
+def test_automatic_frequency_is_not_marked_forced() -> None:
+    selection = select_hardware(HardwareConfig())
+
+    assert selection.processing_fps == 30.0
+    assert selection.processing_fps_forced is False
 
 
 def test_diagnostics_report_hint_profile_backend_frequency_and_benchmark() -> None:

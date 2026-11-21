@@ -34,7 +34,9 @@ from aircue.gestures.recognizer import GestureRecognizer
 from aircue.gestures.semantic import GestureAction, SemanticEvent
 from aircue.gestures.vocabulary import Gesture
 from aircue.hardware.selection import HardwareSelection, select_hardware
+from aircue.performance.frequency import AdaptiveFrequencyController
 from aircue.performance.metrics import MetricsRecorder
+from aircue.performance.resources import ProcessResourceSampler, ResourceSampler
 from aircue.performance.timing import FrameTimings, Stage, measure
 from aircue.presentation.adapter import (
     Click,
@@ -75,6 +77,9 @@ logger = logging.getLogger("aircue.runtime")
 _TICK_INTERVAL_S = 0.01
 _EVENT_QUEUE_SIZE = 16
 _JOIN_TIMEOUT_S = 1.0
+_RESOURCE_SAMPLE_INTERVAL_NS = 500_000_000
+_RESOURCE_RECOVERY_NS = 2_000_000_000
+_RESOURCE_RECOVERY_RATIO = 0.9
 _COMPLETION_STAGES = frozenset(
     {Stage.COMMAND_VALIDATION, Stage.DISPATCH_QUEUE_WAIT, Stage.ADAPTER_EXECUTION}
 )
@@ -156,6 +161,8 @@ class AirCueRuntime:
         adapter: PresentationAdapter | None = None,
         indicator: StatusIndicator | None = None,
         selection: HardwareSelection | None = None,
+        resources: ResourceSampler | None = None,
+        resource_limits: bool = True,
         clock_ns: Callable[[], int] = time.monotonic_ns,
         key_down: Callable[[int], bool] | None = None,
         instrument: bool = True,
@@ -165,6 +172,31 @@ class AirCueRuntime:
         self.instrument = instrument
         self.metrics = MetricsRecorder(clock_ns=clock_ns)
         self.hardware = selection or select_hardware(config.hardware)
+        self.frequency = AdaptiveFrequencyController(
+            min_fps=self.hardware.tier.min_fps,
+            max_fps=self.hardware.tier.max_fps,
+            target_ms=self.hardware.tier.recognition_compute_p95_ms,
+            start_fps=self.hardware.processing_fps,
+            forced=self.hardware.processing_fps_forced,
+            cpu_ceiling=(
+                config.hardware.cpu_ceiling_percent / 100
+                if config.hardware.cpu_ceiling_percent > 0
+                else None
+            ),
+        )
+        self._resources = resources
+        ceilings_configured = (
+            config.hardware.cpu_ceiling_percent > 0
+            or config.hardware.memory_ceiling_mb > 0
+        )
+        if self._resources is None and resource_limits and ceilings_configured:
+            self._resources = ProcessResourceSampler(clock_ns=clock_ns)
+        self._cpu_fraction: float | None = None
+        self._memory_bytes: int | None = None
+        self._last_resource_sample_ns: int | None = None
+        self._resource_ceiling = False
+        self._resource_recovered_since_ns: int | None = None
+        self._next_frame_ns: int | None = None
         self.machine = StateMachine()
         self.feedback = StatusFeedback(indicator or _SilentIndicator())
         self.manager = CommandManager()
@@ -311,6 +343,8 @@ class AirCueRuntime:
         self._last_target_kind = None
         self._last_capture_count = 0
         self._last_capture_ns = self.clock_ns()
+        self._next_frame_ns = None
+        self._last_resource_sample_ns = None
 
         self._capture = CaptureThread(
             self.source,
@@ -554,6 +588,7 @@ class AirCueRuntime:
         self._expire_click(now)
         self._update_target(now)
         self._check_camera(now)
+        self._check_resources(now)
 
     def _vision_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -561,6 +596,12 @@ class AirCueRuntime:
             frame = self.frames.take(0.1)
             if frame is None:
                 continue
+            now_ns = self.clock_ns()
+            if self._next_frame_ns is not None and now_ns < self._next_frame_ns:
+                continue
+            self._next_frame_ns = now_ns + round(
+                1_000_000_000 / self.frequency.fps
+            )
             if self.instrument:
                 timings = frame.timings or FrameTimings()
                 timings.record(
@@ -568,9 +609,123 @@ class AirCueRuntime:
                 )
                 if timings is not frame.timings:
                     frame = replace(frame, timings=timings)
+            elif frame.timings is not None:
+                frame = replace(frame, timings=None)
+            compute_started_ns = time.perf_counter_ns()
             self.process_frame(frame)
             if self._vision_error is not None:
                 return
+            self._observe_frequency(
+                compute_started_ns, time.perf_counter_ns(), now_ns
+            )
+
+    def _observe_frequency(
+        self, started_ns: int, ended_ns: int, now_ns: int
+    ) -> None:
+        decision = self.frequency.observe(
+            compute_ms=max(0, ended_ns - started_ns) / 1_000_000,
+            queue_depth=self.frames.depth + self.events.qsize(),
+            cpu_fraction=self._cpu_fraction,
+            now_ns=now_ns,
+        )
+        if not decision.changed:
+            return
+        logger.info(
+            "processing frequency %.1f fps: %s", decision.fps, decision.reason
+        )
+        record_event(
+            "frequency",
+            generation=self.machine.generation,
+            processing_fps=decision.fps,
+            reason=decision.reason,
+        )
+
+    def _check_resources(self, now_ns: int) -> None:
+        resources = self._resources
+        if resources is None:
+            return
+        last = self._last_resource_sample_ns
+        if last is not None and now_ns - last < _RESOURCE_SAMPLE_INTERVAL_NS:
+            return
+        self._last_resource_sample_ns = now_ns
+        sample = resources.sample()
+        self._cpu_fraction = sample.cpu_fraction
+        self._memory_bytes = sample.memory_bytes
+
+        cpu_ceiling = self.config.hardware.cpu_ceiling_percent / 100
+        memory_ceiling = self.config.hardware.memory_ceiling_mb * 1024 * 1024
+        breaches: list[str] = []
+        if (
+            cpu_ceiling > 0
+            and sample.cpu_fraction is not None
+            and sample.cpu_fraction >= cpu_ceiling
+        ):
+            breaches.append(
+                f"cpu {sample.cpu_fraction * 100:.0f}% >= {cpu_ceiling * 100:.0f}%"
+            )
+        if (
+            memory_ceiling > 0
+            and sample.memory_bytes is not None
+            and sample.memory_bytes >= memory_ceiling
+        ):
+            breaches.append(
+                f"memory {sample.memory_bytes / 1024 / 1024:.0f} MB >= "
+                f"{self.config.hardware.memory_ceiling_mb} MB"
+            )
+
+        if breaches:
+            self._resource_recovered_since_ns = None
+            if self._resource_ceiling:
+                return
+            self._resource_ceiling = True
+            self.instrument = False
+            message = "; ".join(breaches)
+            self.feedback.warning(f"resource limit: {message}")
+            record_event(
+                "resource_ceiling",
+                generation=self.machine.generation,
+                level=logging.WARNING,
+                reason=message,
+                cpu_fraction=sample.cpu_fraction,
+                memory_bytes=sample.memory_bytes,
+            )
+            return
+
+        if not self._resource_ceiling:
+            return
+        if not self._inside_recovery_band(cpu_ceiling, memory_ceiling):
+            self._resource_recovered_since_ns = None
+            return
+        if self._resource_recovered_since_ns is None:
+            self._resource_recovered_since_ns = now_ns
+            return
+        if now_ns - self._resource_recovered_since_ns < _RESOURCE_RECOVERY_NS:
+            return
+        self._resource_ceiling = False
+        self._resource_recovered_since_ns = None
+        self.instrument = True
+        self.feedback.warning(None)
+        record_event(
+            "resource_recovered",
+            generation=self.machine.generation,
+            cpu_fraction=self._cpu_fraction,
+            memory_bytes=self._memory_bytes,
+        )
+
+    def _inside_recovery_band(
+        self, cpu_ceiling: float, memory_ceiling: int
+    ) -> bool:
+        if (
+            cpu_ceiling > 0
+            and self._cpu_fraction is not None
+            and self._cpu_fraction > cpu_ceiling * _RESOURCE_RECOVERY_RATIO
+        ):
+            return False
+        return not (
+            memory_ceiling > 0
+            and self._memory_bytes is not None
+            and self._memory_bytes > memory_ceiling * _RESOURCE_RECOVERY_RATIO
+        )
 
     def _activation(
         self, source: ActivationSource, timestamp_ns: int
@@ -680,7 +835,7 @@ class AirCueRuntime:
     def _record_completion_stages(
         self, timings: FrameTimings | None, timestamp_ns: int
     ) -> None:
-        if timings is None:
+        if not self.instrument or timings is None:
             return
         for span in timings.spans:
             if span.stage in _COMPLETION_STAGES:

@@ -14,6 +14,7 @@ def status(
     *,
     prompt: str | None = None,
     reason: str | None = None,
+    warning: str | None = None,
 ) -> StatusModel:
     return StatusModel(
         state=state,
@@ -21,6 +22,7 @@ def status(
         capabilities=capabilities_for(kind),
         prompt=prompt,
         reason=reason,
+        warning=warning,
     )
 
 
@@ -73,3 +75,16 @@ def test_modes_show_their_name_and_full_capabilities() -> None:
         text = format_status(status(state, TargetKind.NORMAL_SLIDESHOW))
         assert state.value.upper() in text
         assert "navigation, pointer" in text
+
+
+def test_a_resource_warning_is_rendered_on_its_own_line() -> None:
+    text = format_status(
+        status(
+            S.ACTIVE,
+            TargetKind.NORMAL_SLIDESHOW,
+            warning="resource limit: cpu 95% >= 85%",
+        )
+    )
+
+    assert "ACTIVE" in text
+    assert "warning: resource limit: cpu 95% >= 85%" in text

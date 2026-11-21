@@ -64,6 +64,8 @@ def test_profile_and_override_fields_exist() -> None:
     assert config.hardware.profile == "auto"
     assert config.hardware.backend == "auto"
     assert config.hardware.processing_fps == 0.0
+    assert config.hardware.cpu_ceiling_percent == 85.0
+    assert config.hardware.memory_ceiling_mb == 1024
     assert (config.hardware.tier1.width, config.hardware.tier1.height) == (640, 360)
     assert (config.hardware.tier2.width, config.hardware.tier2.height) == (1280, 720)
     assert config.hardware.tier1.max_fps == 15.0

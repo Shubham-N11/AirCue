@@ -27,6 +27,7 @@ class HardwareSelection:
     tier: TierConfig
     backend: str
     processing_fps: float
+    processing_fps_forced: bool = False
     profile_source: str = "hint"
     overrides: tuple[str, ...] = ()
     calibration: CalibrationResult | None = None
@@ -112,7 +113,8 @@ def select_hardware(
         overrides.append("backend=gpu requested; cpu used (no supported GPU backend)")
 
     tier: TierConfig = getattr(hardware, profile.value)
-    if hardware.processing_fps > 0:
+    forced_fps = hardware.processing_fps > 0
+    if forced_fps:
         processing_fps = hardware.processing_fps
         overrides.append(f"processing_fps={processing_fps:g}")
     else:
@@ -124,6 +126,7 @@ def select_hardware(
         tier=tier,
         backend=backend,
         processing_fps=processing_fps,
+        processing_fps_forced=forced_fps,
         profile_source=profile_source,
         overrides=tuple(overrides),
         calibration=calibration,
