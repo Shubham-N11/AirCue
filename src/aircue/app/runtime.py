@@ -150,6 +150,10 @@ class _LatestSlot(Generic[T]):
             return value
 
 
+def _format_mode(mode: CaptureMode) -> str:
+    return f"{mode.width}x{mode.height}@{mode.fps:g}"
+
+
 class AirCueRuntime:
     """Owns the wired components, the session threads, and the state loop."""
 
@@ -276,7 +280,7 @@ class AirCueRuntime:
         self.tracker = self._tracker
         try:
             self.source = self._source or OpenCvCameraSource(self.config.camera.device_index)
-            self.source.open(self._capture_mode())
+            opened = self.source.open(self._capture_mode())
         except CaptureError as exc:
             return self._fail(StartupComponent.CAMERA, str(exc), now)
         except Exception as exc:
@@ -335,6 +339,13 @@ class AirCueRuntime:
             benchmark_result=self.hardware.benchmark_result,
             benchmark_margin_percent=self.hardware.benchmark_margin_percent,
             overrides=list(self.hardware.overrides),
+        )
+        record_event(
+            "camera",
+            generation=record.generation,
+            requested=_format_mode(opened.requested),
+            actual=_format_mode(opened.mode),
+            fallback=opened.fallback_used,
         )
         diagnostics = self.config.diagnostics
         if diagnostics.debug_capture and diagnostics.debug_capture_dir.strip():
@@ -1139,7 +1150,7 @@ class AirCueRuntime:
             if self._stop_event.is_set():
                 return
             try:
-                source.open(self._capture_mode())
+                reopened = source.open(self._capture_mode())
             except Exception as exc:
                 left = self.recovery.camera_attempt_failed()
                 record_event(
@@ -1170,6 +1181,7 @@ class AirCueRuntime:
                 generation=self.machine.generation,
                 reason="camera reconnect succeeded",
                 attempt=attempt,
+                mode=_format_mode(reopened.mode),
                 timestamp_ns=self.clock_ns(),
             )
             return
