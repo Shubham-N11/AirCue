@@ -198,5 +198,4 @@ mypy
 
 ## License
 
-No license has been selected for this project. Do not assume permission to
-copy, modify, or distribute it; licensing is an explicit owner decision.
+AirCue is released under the [MIT License](LICENSE).
