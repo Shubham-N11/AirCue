@@ -185,9 +185,9 @@ command sequence, elapsed time, and fault reason. Logs contain no camera images.
 Run the checks:
 
 ```powershell
-pytest
-ruff check .
-mypy
+python -m pytest -q
+python -m ruff check src tests
+python -m mypy src
 ```
 
 ## Documentation

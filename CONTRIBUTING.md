@@ -15,9 +15,9 @@ pip install -e ".[dev]"
 Run these before every pull request:
 
 ```powershell
-pytest
-ruff check .
-mypy
+python -m pytest -q
+python -m ruff check src tests
+python -m mypy src
 ```
 
 Tests must not require a camera or a running PowerPoint instance. Use synthetic
@@ -35,5 +35,7 @@ describe a proposed target as verified.
 
 ## Licensing
 
-No license has been selected. Do not assume permission to reuse the code, and
-do not add a license file or license claim without the owner's written decision.
+AirCue is released under the MIT License (see `LICENSE`). By contributing, you
+agree that your contribution is licensed under the same terms. Do not add
+third-party code, models, or fixtures unless their license permits
+redistribution and the terms are recorded.
