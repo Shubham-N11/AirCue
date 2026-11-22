@@ -6,7 +6,7 @@
 - [x] 1.2 Create `pyproject.toml` with Python 3.11+, OpenCV and NumPy as runtime dependencies, pytest, ruff, and mypy as dev dependencies, and the `aircue` console entry point. The hand-landmark runtime is added only after task 2.3 selects it. Verify `pip install -e ".[dev]"` succeeds on Windows and `aircue --help` works.
 - [x] 1.3 Implement the typed configuration schema, defaults, JSON loader, range validation, unknown-key rejection, and profile/override fields; verify tests cover valid, out-of-range, wrong-type, and unknown-key inputs, and that every default in design.md D10 is represented.
 - [x] 1.4 Add repository metadata: `.gitignore`, `.editorconfig`, `README.md` skeleton, `CONTRIBUTING.md`, and `SECURITY.md`. Do not create a `LICENSE` file and do not state a license; verify no license file or license claim exists until the owner decision is recorded.
-- [ ] 1.5 Add a Windows CI workflow that installs the package, runs ruff and mypy, and runs unit and integration tests; verify the workflow file is valid and the first push produces a green run.
+- [x] 1.5 Add a Windows CI workflow that installs the package, runs ruff and mypy, and runs unit and integration tests; verify the workflow file is valid and the first push produces a green run.
 - [x] 1.6 Confirm OpenSpec artifacts remain untouched by application code; verify `openspec validate "establish-aircue-gesture-navigation" --strict` passes.
 - [x] 1.7 Commit the foundation as one atomic commit; verify `git status` is clean and the commit contains no generated caches or secrets.
 
