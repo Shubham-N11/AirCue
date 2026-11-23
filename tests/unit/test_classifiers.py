@@ -12,6 +12,9 @@ from aircue.gestures.classifiers import (
     is_thumbs_up,
 )
 from aircue.vision.types import (
+    INDEX_MCP,
+    INDEX_PIP,
+    INDEX_TIP,
     THUMB_MCP,
     THUMB_TIP,
     HandFeatures,
@@ -20,15 +23,30 @@ from aircue.vision.types import (
 from tests.fixtures.landmarks import BASE_POSE, make_landmarks
 
 
+def index_landmarks(angle_deg: float) -> dict[int, tuple[float, float, float, float]]:
+    mcp = (0.45, 0.60)
+    pip = (0.45, 0.45)
+    radians = math.radians(90.0 - angle_deg)
+    tip = (pip[0] + 0.15 * math.cos(radians), pip[1] + 0.15 * math.sin(radians))
+    return {
+        INDEX_MCP: (*mcp, 0.0, 0.9),
+        INDEX_PIP: (*pip, 0.0, 0.9),
+        INDEX_TIP: (*tip, 0.0, 0.9),
+    }
+
+
 def hand(
     extensions: tuple[bool | None, ...],
     *,
     pinch_distance: float | None = 1.0,
     thumb_tip: tuple[float, float] | None = None,
+    index_angle_deg: float | None = None,
 ) -> HandRecord:
     overrides = {}
     if thumb_tip is not None:
         overrides[THUMB_TIP] = (thumb_tip[0], thumb_tip[1], 0.0, 0.9)
+    if index_angle_deg is not None:
+        overrides.update(index_landmarks(index_angle_deg))
     features = HandFeatures(
         wrist_angle_deg=0.0,
         pinch_distance=pinch_distance,
@@ -80,6 +98,25 @@ def test_pointer_pose_requires_separation_above_threshold() -> None:
     assert is_pointer_pose(hand(pose, pinch_distance=0.401)) is True
     assert is_pointer_pose(hand(pose, pinch_distance=0.40)) is False
     assert is_pointer_pose(hand(pose, pinch_distance=0.399)) is False
+
+
+def test_pointer_pose_tolerates_a_slightly_bent_index() -> None:
+    # Real pointer frames measure 140-158 degrees at the PIP joint while pointing.
+    pose = (True, False, False, False, False)
+    assert is_pointer_pose(hand(pose, index_angle_deg=145.0)) is True
+    assert is_pointer_pose(hand(pose, index_angle_deg=144.9)) is False
+
+
+def test_pointer_pose_rejects_a_curled_index() -> None:
+    pose = (True, False, False, False, False)
+    assert is_pointer_pose(hand(pose, index_angle_deg=120.0)) is False
+
+
+def test_pointer_pose_uses_the_configured_extension_threshold() -> None:
+    pose = (True, False, False, False, False)
+    bent = hand(pose, index_angle_deg=140.0)
+    assert is_pointer_pose(bent) is False
+    assert is_pointer_pose(bent, extended_angle_deg=150.0) is True
 
 
 def test_thumbs_up_requires_an_upward_thumb() -> None:

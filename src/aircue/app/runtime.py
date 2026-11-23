@@ -1327,7 +1327,9 @@ class AirCueRuntime:
 
     def _pointer_point(self, hand: HandRecord | None) -> tuple[float, float] | None:
         if hand is None or not is_pointer_pose(
-            hand, self.config.gestures.pointer_min_separation
+            hand,
+            self.config.gestures.pointer_min_separation,
+            self.config.gestures.finger_extended_angle_deg,
         ):
             return None
         tip = self._landmark(hand, INDEX_TIP)
