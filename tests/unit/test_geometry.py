@@ -22,6 +22,9 @@ from aircue.vision.types import (
     INDEX_PIP,
     INDEX_TIP,
     MIDDLE_MCP,
+    THUMB_CMC,
+    THUMB_IP,
+    THUMB_MCP,
     THUMB_TIP,
     WRIST,
     Landmark,
@@ -139,6 +142,49 @@ def test_finger_extension_uses_the_configured_threshold() -> None:
 
     assert finger_extension(index_pose(69.9), flags(), 160.0)[1] is False
     assert finger_extension(index_pose(70.1), flags(), 160.0)[1] is True
+
+
+def _point_at(
+    origin: tuple[float, float], degrees: float, length: float = 0.2
+) -> tuple[float, float]:
+    radians = math.radians(degrees)
+    return (
+        origin[0] + length * math.cos(radians),
+        origin[1] + length * math.sin(radians),
+    )
+
+
+def _thumb_pose(ip_angle_deg: float, mcp_angle_deg: float):
+    cmc = (0.50, 0.70)
+    mcp = (0.50, 0.50)
+    ip = _point_at(mcp, 90.0 - mcp_angle_deg)
+    tip = _point_at(ip, 270.0 - mcp_angle_deg - ip_angle_deg)
+    return pose(
+        {
+            THUMB_CMC: (*cmc, 0.0, 0.9),
+            THUMB_MCP: (*mcp, 0.0, 0.9),
+            THUMB_IP: (*ip, 0.0, 0.9),
+            THUMB_TIP: (*tip, 0.0, 0.9),
+        }
+    )
+
+
+def test_thumb_extension_tolerates_a_slightly_bent_ip_joint() -> None:
+    # Pointer frames measure IP at ~145 deg while the MCP stays straight at ~178.
+    hand = _thumb_pose(ip_angle_deg=145.0, mcp_angle_deg=178.0)
+    assert finger_extension(hand, flags())[0] is True
+
+
+def test_thumb_extension_tolerates_a_slightly_bent_mcp_joint() -> None:
+    # Thumbs-up frames measure the MCP near the threshold while the IP is straight.
+    hand = _thumb_pose(ip_angle_deg=178.0, mcp_angle_deg=162.0)
+    assert finger_extension(hand, flags())[0] is True
+
+
+def test_thumb_is_not_extended_when_both_joints_bend() -> None:
+    # Fist frames measure IP at ~145 deg and MCP at ~100 deg.
+    hand = _thumb_pose(ip_angle_deg=145.0, mcp_angle_deg=100.0)
+    assert finger_extension(hand, flags())[0] is False
 
 
 def test_hand_openness_counts_extended_fingers() -> None:

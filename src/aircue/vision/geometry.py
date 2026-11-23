@@ -18,6 +18,7 @@ from aircue.vision.types import (
     RING_MCP,
     RING_PIP,
     RING_TIP,
+    THUMB_CMC,
     THUMB_IP,
     THUMB_MCP,
     THUMB_TIP,
@@ -32,6 +33,8 @@ _FINGER_JOINTS = (
     (RING_MCP, RING_PIP, RING_TIP),
     (PINKY_MCP, PINKY_PIP, PINKY_TIP),
 )
+_THUMB_MCP_JOINTS = (THUMB_CMC, THUMB_MCP, THUMB_IP)
+_THUMB_EXTENSION_TOLERANCE_DEG = 20.0
 
 
 def usable_landmarks(
@@ -86,7 +89,11 @@ def finger_extension(
 ) -> tuple[bool | None, ...]:
     """Extension state for thumb, index, middle, ring, and little."""
     usable = usable_landmarks(landmarks, valid)
-    return tuple(_finger_extended(usable, joints, threshold_deg) for joints in _FINGER_JOINTS)
+    thumb = _thumb_extended(usable, threshold_deg)
+    return (thumb,) + tuple(
+        _finger_extended(usable, joints, threshold_deg)
+        for joints in _FINGER_JOINTS[1:]
+    )
 
 
 def hand_openness(extensions: Sequence[bool | None]) -> float | None:
@@ -107,14 +114,35 @@ def joint_angle_deg(vertex: Landmark, first: Landmark, second: Landmark) -> floa
     return math.degrees(math.acos(cosine))
 
 
+def _thumb_extended(
+    landmarks: dict[int, Landmark], threshold_deg: float
+) -> bool | None:
+    """Both thumb joints must stay within a relaxed threshold.
+
+    The thumb's two joints read noisier than a long finger's single joint, so the
+    worst of the two is allowed 20 degrees more bend. Requiring both still rejects
+    a thumb folded at either joint.
+    """
+    ip = _joint_angle(landmarks, _FINGER_JOINTS[0])
+    mcp = _joint_angle(landmarks, _THUMB_MCP_JOINTS)
+    if ip is None or mcp is None:
+        return None
+    return min(ip, mcp) >= threshold_deg - _THUMB_EXTENSION_TOLERANCE_DEG
+
+
+def _joint_angle(
+    landmarks: dict[int, Landmark], joints: tuple[int, int, int]
+) -> float | None:
+    base, middle, tip = (landmarks.get(index) for index in joints)
+    if base is None or middle is None or tip is None:
+        return None
+    return joint_angle_deg(middle, base, tip)
+
+
 def _finger_extended(
     landmarks: dict[int, Landmark],
     joints: tuple[int, int, int],
     threshold_deg: float,
 ) -> bool | None:
-    base = landmarks.get(joints[0])
-    middle = landmarks.get(joints[1])
-    tip = landmarks.get(joints[2])
-    if base is None or middle is None or tip is None:
-        return None
-    return joint_angle_deg(middle, base, tip) >= threshold_deg
+    angle = _joint_angle(landmarks, joints)
+    return None if angle is None else angle >= threshold_deg

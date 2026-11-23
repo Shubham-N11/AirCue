@@ -29,6 +29,7 @@ from aircue.vision.types import (
     PINKY_TIP,
     RING_PIP,
     RING_TIP,
+    THUMB_CMC,
     THUMB_IP,
     THUMB_MCP,
     THUMB_TIP,
@@ -69,11 +70,13 @@ def pose_overrides(
 ) -> dict[int, tuple[float, float, float, float]]:
     overrides = {FINGER_JOINTS[name][2]: curled_tip(*FINGER_JOINTS[name][:2]) for name in curled}
     if thumb_up:
+        overrides[THUMB_CMC] = (0.36, 0.69, 0.0, 0.9)
         overrides[THUMB_IP] = (0.36, 0.55, 0.0, 0.9)
         overrides[THUMB_TIP] = (0.36, 0.45, 0.0, 0.9)
     if pinch:
         overrides[THUMB_TIP] = BASE_POSE[INDEX_TIP][:2] + (0.0, 0.9)
     if pointer:
+        overrides[THUMB_CMC] = (0.33, 0.67, 0.0, 0.9)
         overrides[THUMB_IP] = (0.40, 0.55, 0.0, 0.9)
         overrides[THUMB_TIP] = (0.4727, 0.4227, 0.0, 0.9)
     return overrides

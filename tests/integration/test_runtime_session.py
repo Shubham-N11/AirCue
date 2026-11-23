@@ -50,6 +50,7 @@ from aircue.vision.types import (
     PINKY_TIP,
     RING_PIP,
     RING_TIP,
+    THUMB_CMC,
     THUMB_IP,
     THUMB_MCP,
     THUMB_TIP,
@@ -370,6 +371,7 @@ def pointer_observation(
     dx, dy = x - mcp_x, y - mcp_y
     index_pip = (mcp_x + 0.3 * dx, mcp_y + 0.3 * dy, 0.0, confidence)
     overrides = {
+        THUMB_CMC: (0.33, 0.67, 0.0, confidence),
         THUMB_IP: (0.40, 0.55, 0.0, confidence),
         THUMB_TIP: (0.4727, 0.4227, 0.0, confidence),
         INDEX_PIP: index_pip,
