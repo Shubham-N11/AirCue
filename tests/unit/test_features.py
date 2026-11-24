@@ -5,6 +5,7 @@ import pytest
 
 from aircue.vision.features import build_frame_record, extract_hand_record, validate_observation
 from aircue.vision.types import (
+    INDEX_DIP,
     INDEX_MCP,
     INDEX_PIP,
     INDEX_TIP,
@@ -37,11 +38,12 @@ def test_valid_hand_has_all_features() -> None:
     assert record.features.finger_extension == (True, True, True, True, True)
 
 
-def test_index_angle_3d_is_computed_from_world_landmarks() -> None:
+def test_index_angle_3d_measures_the_pip_joint() -> None:
     world = list(make_landmarks())
     world[INDEX_MCP] = Landmark(0.5, 1.0, 0.0, 0.9)
     world[INDEX_PIP] = Landmark(0.5, 0.5, 0.0, 0.9)
-    world[INDEX_TIP] = Landmark(0.6, 0.5, 0.0, 0.9)
+    world[INDEX_DIP] = Landmark(0.6, 0.5, 0.0, 0.9)
+    world[INDEX_TIP] = Landmark(0.7, 0.4, 0.0, 0.9)
     record = extract(
         replace(make_observation(), world_landmarks=tuple(world))
     )

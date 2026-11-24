@@ -13,9 +13,9 @@ from aircue.vision.geometry import (
     wrist_angle,
 )
 from aircue.vision.types import (
+    INDEX_DIP,
     INDEX_MCP,
     INDEX_PIP,
-    INDEX_TIP,
     LANDMARK_COUNT,
     FrameRecord,
     HandFeatures,
@@ -60,17 +60,17 @@ def validate_observation(
 def _index_angle_3d(
     world_landmarks: tuple[Landmark, ...], valid: tuple[bool, ...]
 ) -> float | None:
-    indices = (INDEX_MCP, INDEX_PIP, INDEX_TIP)
-    if len(world_landmarks) <= INDEX_TIP or not all(valid[index] for index in indices):
+    indices = (INDEX_MCP, INDEX_PIP, INDEX_DIP)
+    if len(world_landmarks) <= INDEX_DIP or not all(valid[index] for index in indices):
         return None
-    mcp, pip, tip = (world_landmarks[index] for index in indices)
+    mcp, pip, dip = (world_landmarks[index] for index in indices)
     if not all(
         math.isfinite(value)
-        for point in (mcp, pip, tip)
+        for point in (mcp, pip, dip)
         for value in (point.x, point.y, point.z)
     ):
         return None
-    return joint_angle_3d_deg(pip, mcp, tip)
+    return joint_angle_3d_deg(pip, mcp, dip)
 
 
 def extract_hand_record(

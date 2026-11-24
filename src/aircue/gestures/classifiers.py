@@ -20,7 +20,7 @@ _THUMBS_UP = (True, False, False, False, False)
 _POINTER = (True, True, False, False, False)
 # Pointing bends the PIP joint more than the synthetic straight pose assumes.
 _POINTER_INDEX_TOLERANCE_DEG = 15.0
-# In 3D a natural point-at-the-camera hooks to ~109-128 degrees; thumbs-up is ~72-85.
+# Foreshortening can collapse the 2D angle below 50 degrees; the 3D PIP angle holds.
 _POINTER_INDEX_3D_MIN_DEG = 100.0
 
 
