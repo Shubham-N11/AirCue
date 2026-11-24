@@ -46,12 +46,14 @@ class HandObservation:
     ``track_id`` is a per-frame detection index. Stable identity across frames is
     assigned by the primary-hand selector, not by the MediaPipe IMAGE-mode adapter.
     MediaPipe exposes hand-level confidence only, so every landmark carries that score.
+    ``world_landmarks`` are the tracker's metric 3D hand coordinates and may be empty.
     """
 
     track_id: int
     landmarks: tuple[Landmark, ...]
     confidence: float
     handedness: str
+    world_landmarks: tuple[Landmark, ...] = ()
 
 
 class TrackerError(RuntimeError):
@@ -83,6 +85,7 @@ class HandFeatures:
     palm_scale: float | None
     openness: float | None
     finger_extension: tuple[bool | None, ...]
+    index_angle_3d_deg: float | None = None
 
 
 @dataclass(frozen=True)

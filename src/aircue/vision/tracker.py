@@ -77,6 +77,7 @@ class MediaPipeHandTracker:
         with measure(frame.timings, Stage.LANDMARK_PROCESSING):
             observations: list[HandObservation] = []
             handedness_groups = result.handedness or []
+            world_groups = getattr(result, "hand_world_landmarks", None) or []
             for index, raw_landmarks in enumerate(result.hand_landmarks or []):
                 categories = handedness_groups[index] if index < len(handedness_groups) else []
                 score = float(categories[0].score) if categories else 0.0
@@ -87,12 +88,18 @@ class MediaPipeHandTracker:
                     Landmark(float(item.x), float(item.y), float(item.z), score)
                     for item in raw_landmarks
                 )
+                raw_world = world_groups[index] if index < len(world_groups) else ()
+                world_landmarks = tuple(
+                    Landmark(float(item.x), float(item.y), float(item.z), score)
+                    for item in raw_world
+                )
                 observations.append(
                     HandObservation(
                         track_id=len(observations),
                         landmarks=landmarks,
                         confidence=score,
                         handedness=label,
+                        world_landmarks=world_landmarks,
                     )
                 )
         return tuple(observations)

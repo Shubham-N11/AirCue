@@ -23,9 +23,15 @@ class FakeCategory:
 
 
 class FakeResult:
-    def __init__(self, hands: list[list[FakeLandmark]], labels: list[list[FakeCategory]]) -> None:
+    def __init__(
+        self,
+        hands: list[list[FakeLandmark]],
+        labels: list[list[FakeCategory]],
+        world: list[list[FakeLandmark]] | None = None,
+    ) -> None:
         self.hand_landmarks = hands
         self.handedness = labels
+        self.hand_world_landmarks = world
 
 
 class FakeLandmarker:
@@ -74,6 +80,24 @@ def test_valid_hand_returns_all_landmarks(tmp_path: Path) -> None:
     assert observation.landmarks[0].x == 0.0
     assert observation.landmarks[10].x == pytest.approx(0.1)
     assert observation.landmarks[0].confidence == pytest.approx(0.91)
+
+
+def test_world_landmarks_are_returned(tmp_path: Path) -> None:
+    world = hand()
+    for landmark in world:
+        landmark.z = 0.5
+    result = FakeResult(
+        [hand()],
+        [[FakeCategory("Right", 0.91)]],
+        world=[world],
+    )
+    source = MediaPipeHandTracker(
+        model_file(tmp_path), landmarker_factory=lambda: FakeLandmarker(result)
+    )
+    observation = source.detect(frame())[0]
+    assert len(observation.world_landmarks) == 21
+    assert observation.world_landmarks[10].x == pytest.approx(0.1)
+    assert observation.world_landmarks[0].z == pytest.approx(0.5)
 
 
 def test_no_hand_returns_empty(tmp_path: Path) -> None:

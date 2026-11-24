@@ -41,6 +41,7 @@ def hand(
     pinch_distance: float | None = 1.0,
     thumb_tip: tuple[float, float] | None = None,
     index_angle_deg: float | None = None,
+    index_angle_3d_deg: float | None = None,
 ) -> HandRecord:
     overrides = {}
     if thumb_tip is not None:
@@ -53,6 +54,7 @@ def hand(
         palm_scale=0.25,
         openness=None,
         finger_extension=extensions,
+        index_angle_3d_deg=index_angle_3d_deg,
     )
     return HandRecord(
         track_id=0,
@@ -110,6 +112,17 @@ def test_pointer_pose_tolerates_a_slightly_bent_index() -> None:
 def test_pointer_pose_rejects_a_curled_index() -> None:
     pose = (True, False, False, False, False)
     assert is_pointer_pose(hand(pose, index_angle_deg=120.0)) is False
+
+
+def test_pointer_pose_accepts_a_natural_hook_in_3d() -> None:
+    # Pointing at the camera collapses the 2D angle while the finger stays straight.
+    pose = (True, False, False, False, False)
+    assert is_pointer_pose(hand(pose, index_angle_deg=42.0, index_angle_3d_deg=105.0)) is True
+
+
+def test_pointer_pose_rejects_a_curled_index_in_3d() -> None:
+    pose = (True, False, False, False, False)
+    assert is_pointer_pose(hand(pose, index_angle_3d_deg=99.9)) is False
 
 
 def test_pointer_pose_uses_the_configured_extension_threshold() -> None:

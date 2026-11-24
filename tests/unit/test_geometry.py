@@ -11,6 +11,7 @@ from aircue.gestures.geometry import (
 from aircue.vision.geometry import (
     finger_extension,
     hand_openness,
+    joint_angle_3d_deg,
     joint_angle_deg,
     palm_scale,
     pinch_distance,
@@ -203,6 +204,14 @@ def test_joint_angle_boundaries() -> None:
     assert joint_angle_deg(origin, right, right) == pytest.approx(0.0)
     assert joint_angle_deg(origin, right, landmark(-1.0, 0.0)) == pytest.approx(180.0)
     assert joint_angle_deg(origin, origin, right) == 0.0
+
+
+def test_joint_angle_3d_uses_depth() -> None:
+    origin = Landmark(0.0, 0.0, 0.0, 0.9)
+    right = Landmark(1.0, 0.0, 0.0, 0.9)
+    forward = Landmark(0.0, 0.0, 1.0, 0.9)
+    assert joint_angle_3d_deg(origin, right, forward) == pytest.approx(90.0)
+    assert joint_angle_3d_deg(origin, right, origin) == 0.0
 
 
 def test_user_perspective_x_is_mirrored() -> None:

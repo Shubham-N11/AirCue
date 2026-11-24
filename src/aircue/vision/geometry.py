@@ -114,6 +114,17 @@ def joint_angle_deg(vertex: Landmark, first: Landmark, second: Landmark) -> floa
     return math.degrees(math.acos(cosine))
 
 
+def joint_angle_3d_deg(vertex: Landmark, first: Landmark, second: Landmark) -> float:
+    """Angle at ``vertex`` using all three metric coordinates."""
+    ax, ay, az = first.x - vertex.x, first.y - vertex.y, first.z - vertex.z
+    bx, by, bz = second.x - vertex.x, second.y - vertex.y, second.z - vertex.z
+    norm = math.sqrt(ax * ax + ay * ay + az * az) * math.sqrt(bx * bx + by * by + bz * bz)
+    if norm == 0:
+        return 0.0
+    cosine = max(-1.0, min(1.0, (ax * bx + ay * by + az * bz) / norm))
+    return math.degrees(math.acos(cosine))
+
+
 def _thumb_extended(
     landmarks: dict[int, Landmark], threshold_deg: float
 ) -> bool | None:

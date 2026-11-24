@@ -7,11 +7,15 @@ import math
 from aircue.vision.geometry import (
     finger_extension,
     hand_openness,
+    joint_angle_3d_deg,
     palm_scale,
     pinch_distance,
     wrist_angle,
 )
 from aircue.vision.types import (
+    INDEX_MCP,
+    INDEX_PIP,
+    INDEX_TIP,
     LANDMARK_COUNT,
     FrameRecord,
     HandFeatures,
@@ -53,6 +57,22 @@ def validate_observation(
     return tuple(padded), tuple(valid)
 
 
+def _index_angle_3d(
+    world_landmarks: tuple[Landmark, ...], valid: tuple[bool, ...]
+) -> float | None:
+    indices = (INDEX_MCP, INDEX_PIP, INDEX_TIP)
+    if len(world_landmarks) <= INDEX_TIP or not all(valid[index] for index in indices):
+        return None
+    mcp, pip, tip = (world_landmarks[index] for index in indices)
+    if not all(
+        math.isfinite(value)
+        for point in (mcp, pip, tip)
+        for value in (point.x, point.y, point.z)
+    ):
+        return None
+    return joint_angle_3d_deg(pip, mcp, tip)
+
+
 def extract_hand_record(
     observation: HandObservation,
     *,
@@ -68,6 +88,7 @@ def extract_hand_record(
         palm_scale=scale,
         openness=hand_openness(extensions),
         finger_extension=extensions,
+        index_angle_3d_deg=_index_angle_3d(observation.world_landmarks, valid),
     )
     return HandRecord(
         track_id=observation.track_id,

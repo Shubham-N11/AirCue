@@ -1,17 +1,21 @@
 import math
+from dataclasses import replace
 
 import pytest
 
 from aircue.vision.features import build_frame_record, extract_hand_record, validate_observation
 from aircue.vision.types import (
+    INDEX_MCP,
+    INDEX_PIP,
     INDEX_TIP,
     MIDDLE_MCP,
     THUMB_TIP,
     WRIST,
     InvalidLandmarkFrameError,
+    Landmark,
     StageTimestamps,
 )
-from tests.fixtures.landmarks import make_observation
+from tests.fixtures.landmarks import make_landmarks, make_observation
 
 
 def extract(observation, confidence=0.5):
@@ -31,6 +35,21 @@ def test_valid_hand_has_all_features() -> None:
     assert record.features.pinch_distance is not None
     assert record.features.openness == pytest.approx(1.0)
     assert record.features.finger_extension == (True, True, True, True, True)
+
+
+def test_index_angle_3d_is_computed_from_world_landmarks() -> None:
+    world = list(make_landmarks())
+    world[INDEX_MCP] = Landmark(0.5, 1.0, 0.0, 0.9)
+    world[INDEX_PIP] = Landmark(0.5, 0.5, 0.0, 0.9)
+    world[INDEX_TIP] = Landmark(0.6, 0.5, 0.0, 0.9)
+    record = extract(
+        replace(make_observation(), world_landmarks=tuple(world))
+    )
+    assert record.features.index_angle_3d_deg == pytest.approx(90.0)
+
+
+def test_index_angle_3d_is_unavailable_without_world_landmarks() -> None:
+    assert extract(make_observation()).features.index_angle_3d_deg is None
 
 
 def test_nan_landmark_rejects_frame() -> None:

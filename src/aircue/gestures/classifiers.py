@@ -20,6 +20,8 @@ _THUMBS_UP = (True, False, False, False, False)
 _POINTER = (True, True, False, False, False)
 # Pointing bends the PIP joint more than the synthetic straight pose assumes.
 _POINTER_INDEX_TOLERANCE_DEG = 15.0
+# In 3D a natural point-at-the-camera hooks to ~109-128 degrees; thumbs-up is ~72-85.
+_POINTER_INDEX_3D_MIN_DEG = 100.0
 
 
 def is_fist(hand: HandRecord) -> bool:
@@ -75,6 +77,8 @@ def _index_points(hand: HandRecord, extended_angle_deg: float) -> bool:
     tip = usable.get(INDEX_TIP)
     if mcp is None or pip is None or tip is None:
         return False
+    if hand.features.index_angle_3d_deg is not None:
+        return hand.features.index_angle_3d_deg >= _POINTER_INDEX_3D_MIN_DEG
     threshold = extended_angle_deg - _POINTER_INDEX_TOLERANCE_DEG
     return joint_angle_deg(pip, mcp, tip) >= threshold
 
